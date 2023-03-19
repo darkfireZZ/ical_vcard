@@ -1,0 +1,8 @@
+[package]
+name = "ical_vcard"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+memchr = "2.5.0"
+thiserror = "1.0.38"
