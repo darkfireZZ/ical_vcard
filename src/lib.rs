@@ -10,7 +10,7 @@ use {
     crate::folding::UnfoldingReader,
     std::{
         fmt::{self, Display},
-        io::{self, BufRead},
+        io::{self, BufRead, Write},
         iter::Iterator,
     },
     thiserror::Error,
@@ -146,6 +146,42 @@ impl Contentline {
             value,
         })
     }
+
+    /// Formats this [`Contentline`] and writes it to a [`Write`].
+    ///
+    /// # Errors
+    ///
+    /// Fails if the underlying [`Write`] returns an error.
+    pub fn write<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+        if let Some(group) = &self.group {
+            write_identifier(group, writer)?;
+            writer.write_all(b".")?;
+        }
+
+        write_identifier(&self.name, writer)?;
+        write_params(&self.params, writer)?;
+
+        writer.write_all(b":")?;
+
+        write_value(&self.value, writer)?;
+
+        Ok(())
+    }
+}
+
+impl Display for Contentline {
+    // TODO this implementation could be a lot more efficient
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let contentline = {
+            // TODO use a better estimation
+            let size_estimate = self.name.value.len() + self.value.value.len();
+            let mut buffer = Vec::with_capacity(size_estimate);
+            self.write(&mut buffer).map_err(|_| fmt::Error::default())?;
+            String::from_utf8(buffer).map_err(|_| fmt::Error::default())?
+        };
+
+        write!(f, "{contentline}")
+    }
 }
 
 // TODO maybe also add some contextual information.
@@ -165,7 +201,7 @@ impl Display for ParseContentlineError {
 /// A [`String`] wrapper that may only contain alphabetic chars, digits and dashes (`-`).
 #[derive(Clone, Debug, Eq)]
 pub struct Identifier {
-    identifier: String,
+    value: String,
 }
 
 impl Identifier {
@@ -177,7 +213,7 @@ impl Identifier {
     /// neither alphabetic, digits or dash (`-`).
     pub fn new(identifier: String) -> Result<Self, InvalidIdentifier> {
         if identifier.chars().all(is_identifier_char) {
-            Ok(Self { identifier })
+            Ok(Self { value: identifier })
         } else {
             Err(InvalidIdentifier)
         }
@@ -186,13 +222,13 @@ impl Identifier {
 
 impl Display for Identifier {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{identifier}", identifier = self.identifier)
+        write!(f, "{identifier}", identifier = self.value)
     }
 }
 
 impl PartialEq for Identifier {
     fn eq(&self, other: &Self) -> bool {
-        self.identifier.eq_ignore_ascii_case(&other.identifier)
+        self.value.eq_ignore_ascii_case(&other.value)
     }
 }
 
@@ -422,24 +458,21 @@ fn parse_param_value(contentline: &mut &str) -> Result<ParamValue, IntermediateP
 // TODO implement RFC 6868
 /// Parses a `quoted-string`.
 ///
+/// Expects that the first character of the argument is a double quote (`"`). Will behave
+/// unexpectedly if the first character is NOT a double quote.
+///
 /// ABNF from [RFC 5545][rfc5545]:
 ///
 /// ```text
 /// quoted-string = DQUOTE *QSAFE-CHAR DQUOTE
 /// ```
 ///
-/// # Errors
-///
-/// Fails if the first character of the argument is not a double quote (`"`) or if there is no
-/// closing double quote.
-///
 /// [rfc5545]: https://www.rfc-editor.org/rfc/rfc5545
 fn parse_quoted_string<'a, 'b>(
     contentline: &'a mut &'b str,
 ) -> Result<&'b str, IntermediateParsingError> {
-    if !contentline.starts_with('"') {
-        return Err(IntermediateParsingError);
-    }
+    debug_assert!(contentline.starts_with('"'));
+
     *contentline = &contentline[1..];
 
     let quoted_string_length = contentline
@@ -508,7 +541,7 @@ fn parse_identifier(contentline: &mut &str) -> Result<Identifier, IntermediatePa
         Err(IntermediateParsingError)
     } else {
         let identifier = Identifier {
-            identifier: contentline[..identifier_length].to_owned(),
+            value: contentline[..identifier_length].to_owned(),
         };
         *contentline = &contentline[identifier_length..];
 
@@ -518,6 +551,76 @@ fn parse_identifier(contentline: &mut &str) -> Result<Identifier, IntermediatePa
 
 /// An zero-sized error type used internally to indicate parsing errors.
 struct IntermediateParsingError;
+
+//====================// contentline writing //====================//
+
+/// Writes a parameter list to a [`Write`].
+///
+/// # Errors
+///
+/// Fails if the underlying [`Write`] returns an error.
+fn write_params<W: Write>(params: &Vec<Param>, writer: &mut W) -> io::Result<()> {
+    for param in params {
+        writer.write_all(b";")?;
+        write_identifier(&param.name, writer)?;
+        writer.write_all(b"=")?;
+        write_param_values(&param.values, writer)?;
+    }
+
+    Ok(())
+}
+
+/// Writes a list of parameter values to a [`Write`].
+///
+/// # Errors
+///
+/// Fails if the underlying [`Write`] returns an error.
+fn write_param_values<W: Write>(values: &Vec<ParamValue>, writer: &mut W) -> io::Result<()> {
+    debug_assert!(!values.is_empty());
+
+    write_param_value(&values[0], writer)?;
+
+    for param_value in &values[1..] {
+        writer.write_all(b",")?;
+        write_param_value(param_value, writer)?;
+    }
+
+    Ok(())
+}
+
+// TODO implement RFC 6868
+/// Writes a single parameter value to a [`Write`].
+///
+/// # Errors
+///
+/// Fails if the underlying [`Write`] returns an error.
+fn write_param_value<W: Write>(value: &ParamValue, writer: &mut W) -> io::Result<()> {
+    if value.value.contains(|c| c == ';' || c == ':' || c == '.') {
+        writer.write_all(b"\"")?;
+        writer.write_all(value.value.as_bytes())?;
+        writer.write_all(b"\"")
+    } else {
+        writer.write_all(value.value.as_bytes())
+    }
+}
+
+/// Writes a [`Value`] to a [`Write`].
+///
+/// # Errors
+///
+/// Fails if the underlying [`Write`] returns an error.
+fn write_value<W: Write>(value: &Value, writer: &mut W) -> io::Result<()> {
+    writer.write_all(value.value.as_bytes())
+}
+
+/// Writes an [`Identifier`] to a [`Write`].
+///
+/// # Errors
+///
+/// Fails if the underlying [`Write`] returns an error.
+fn write_identifier<W: Write>(identifier: &Identifier, writer: &mut W) -> io::Result<()> {
+    writer.write_all(identifier.value.as_bytes())
+}
 
 //====================// helper functions for parsing //====================//
 
