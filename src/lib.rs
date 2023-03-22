@@ -7,7 +7,10 @@
 #![warn(missing_docs)]
 
 use {
-    crate::folding::UnfoldingReader,
+    crate::folding::{
+        FoldingWriter,
+        UnfoldingReader,
+    },
     std::{
         fmt::{self, Display},
         io::{self, BufRead, Write},
@@ -16,23 +19,16 @@ use {
     thiserror::Error,
 };
 
-pub mod folding;
+mod folding;
 
 // TODO improve documentation & add examples
-/// Parses a vCard or iCalendar file.
+/// Parses an iCalendar or vCard file.
 ///
-/// Returns an [`Iterator`] of [`Contentline`]s.
-pub fn read<R: BufRead>(vcard_or_ical_file: R) -> ContentlineParser<R> {
-    ContentlineParser::new(vcard_or_ical_file)
-}
-
-/// A iCalendar or vCard parser.
-///
-/// Using the parser is very straightforward as it implements [`Iterator`]:
+/// Returns an [`Iterator`] of [`Result<Contentline, ParseError>`].
 ///
 /// ```
-/// use ical_vcard::{Contentline, ContentlineParser, Identifier, Param, ParamValue, ParseError, Value};
-///
+/// # use ical_vcard::{Contentline, Identifier, Param, ParamValue, ParseError, Value};
+/// #
 /// let vcard_file = String::from("\
 /// BEGIN:VCARD\r
 /// VERSION:4.0\r
@@ -44,7 +40,7 @@ pub fn read<R: BufRead>(vcard_or_ical_file: R) -> ContentlineParser<R> {
 /// END:VCARD\r
 /// ");
 ///
-/// let parsed_vcard = ContentlineParser::new(vcard_file.as_bytes()).collect::<Result<Vec<_>, _>>().unwrap();
+/// let parsed_vcard = ical_vcard::parse(vcard_file.as_bytes()).collect::<Result<Vec<_>, _>>().unwrap();
 ///
 /// assert_eq!(parsed_vcard[2], Contentline {
 ///     group: Some(Identifier::new(String::from("namegroup")).unwrap()),
@@ -63,20 +59,42 @@ pub fn read<R: BufRead>(vcard_or_ical_file: R) -> ContentlineParser<R> {
 ///     value: Value::new(String::from("michelle.depierre@example.com")).unwrap(),
 /// });
 /// ```
-pub struct ContentlineParser<R: BufRead> {
+pub fn parse<R: BufRead>(ical_or_vcard_file: R) -> Parse<R> {
+    Parse::new(ical_or_vcard_file)
+}
+
+// TODO improve documentation & add examples
+/// Writes an iCalendar or vCard file.
+///
+/// # Errors
+///
+/// Fails if the [`Write`] returns an error.
+pub fn write<'a, W: Write, I: Iterator<Item = &'a Contentline>>(ical_or_vcard: I, writer: W) -> io::Result<()> {
+    let mut writer = FoldingWriter::new(writer);
+
+    for contentline in ical_or_vcard {
+        contentline.write(|s| writer.write(s))?;
+        writer.end_line()?;
+    }
+
+    Ok(())
+}
+
+#[derive(Debug)]
+pub struct Parse<R: BufRead> {
     unfolder: UnfoldingReader<R>,
 }
 
-impl<R: BufRead> ContentlineParser<R> {
-    /// Creates a new [`ContentlineParser`].
-    pub fn new(reader: R) -> Self {
+impl<R: BufRead> Parse<R> {
+    /// Creates a new [`Parse`].
+    fn new(reader: R) -> Self {
         Self {
             unfolder: UnfoldingReader::new(reader),
         }
     }
 }
 
-impl<R: BufRead> Iterator for ContentlineParser<R> {
+impl<R: BufRead> Iterator for Parse<R> {
     type Item = Result<Contentline, ParseError>;
     fn next(&mut self) -> Option<Self::Item> {
         match self.unfolder.next_line()? {
@@ -124,7 +142,7 @@ impl Contentline {
     /// # Errors
     ///
     /// Fails if the given content line is incorrectly formatted.
-    pub fn parse(mut contentline: &str) -> Result<Self, ParseContentlineError> {
+    fn parse(mut contentline: &str) -> Result<Self, ParseContentlineError> {
         let error = || ParseContentlineError {
             invalid_contentline: contentline.to_owned(),
         };
@@ -147,40 +165,30 @@ impl Contentline {
         })
     }
 
-    /// Formats this [`Contentline`] and writes it to a [`Write`].
-    ///
-    /// # Errors
-    ///
-    /// Fails if the underlying [`Write`] returns an error.
-    pub fn write<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+    // TODO document
+    fn write<E, W>(&self, mut writer: W) -> Result<(), E>
+    where
+        W: FnMut(&str) -> Result<(), E>,
+    {
         if let Some(group) = &self.group {
-            write_identifier(group, writer)?;
-            writer.write_all(b".")?;
+            write_identifier(group, &mut writer)?;
+            writer(".")?;
         }
 
-        write_identifier(&self.name, writer)?;
-        write_params(&self.params, writer)?;
+        write_identifier(&self.name, &mut writer)?;
+        write_params(&self.params, &mut writer)?;
 
-        writer.write_all(b":")?;
+        writer(":")?;
 
-        write_value(&self.value, writer)?;
+        write_value(&self.value, &mut writer)?;
 
         Ok(())
     }
 }
 
 impl Display for Contentline {
-    // TODO this implementation could be a lot more efficient
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let contentline = {
-            // TODO use a better estimation
-            let size_estimate = self.name.value.len() + self.value.value.len();
-            let mut buffer = Vec::with_capacity(size_estimate);
-            self.write(&mut buffer).map_err(|_| fmt::Error::default())?;
-            String::from_utf8(buffer).map_err(|_| fmt::Error::default())?
-        };
-
-        write!(f, "{contentline}")
+        self.write(|s| f.write_str(s))
     }
 }
 
@@ -285,11 +293,7 @@ impl Display for InvalidParam {
 /// A value of a [`Param`].
 ///
 /// This is a wrapper around a [`String`] that contains no control characters except horizontal
-/// tabs (`'\t').
-///
-/// Implements [RFC 6868][rfc6868].
-///
-/// [rfc6868]: https://www.rfc-editor.org/rfc/rfc6868
+/// tabs (`'\t'`).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ParamValue {
     value: String,
@@ -553,35 +557,42 @@ fn parse_identifier(contentline: &mut &str) -> Result<Identifier, IntermediatePa
 struct IntermediateParsingError;
 
 //====================// contentline writing //====================//
+// TODO improve documentation of this section
 
-/// Writes a parameter list to a [`Write`].
+/// Writes a parameter list.
 ///
 /// # Errors
 ///
-/// Fails if the underlying [`Write`] returns an error.
-fn write_params<W: Write>(params: &Vec<Param>, writer: &mut W) -> io::Result<()> {
+/// Fails if the writer function returns an error.
+fn write_params<E, W>(params: &Vec<Param>, writer: &mut W) -> Result<(), E>
+where
+    W: FnMut(&str) -> Result<(), E>,
+{
     for param in params {
-        writer.write_all(b";")?;
+        writer(";")?;
         write_identifier(&param.name, writer)?;
-        writer.write_all(b"=")?;
+        writer("=")?;
         write_param_values(&param.values, writer)?;
     }
 
     Ok(())
 }
 
-/// Writes a list of parameter values to a [`Write`].
+/// Writes a list of parameter values.
 ///
 /// # Errors
 ///
-/// Fails if the underlying [`Write`] returns an error.
-fn write_param_values<W: Write>(values: &Vec<ParamValue>, writer: &mut W) -> io::Result<()> {
+/// Fails if the writer function returns an error.
+fn write_param_values<E, W>(values: &Vec<ParamValue>, writer: &mut W) -> Result<(), E>
+where
+    W: FnMut(&str) -> Result<(), E>,
+{
     debug_assert!(!values.is_empty());
 
     write_param_value(&values[0], writer)?;
 
     for param_value in &values[1..] {
-        writer.write_all(b",")?;
+        writer(",")?;
         write_param_value(param_value, writer)?;
     }
 
@@ -589,37 +600,46 @@ fn write_param_values<W: Write>(values: &Vec<ParamValue>, writer: &mut W) -> io:
 }
 
 // TODO implement RFC 6868
-/// Writes a single parameter value to a [`Write`].
+/// Writes a single parameter value.
 ///
 /// # Errors
 ///
-/// Fails if the underlying [`Write`] returns an error.
-fn write_param_value<W: Write>(value: &ParamValue, writer: &mut W) -> io::Result<()> {
+/// Fails if the writer function returns an error.
+fn write_param_value<E, W>(value: &ParamValue, writer: &mut W) -> Result<(), E>
+where
+    W: FnMut(&str) -> Result<(), E>,
+{
     if value.value.contains(|c| c == ';' || c == ':' || c == '.') {
-        writer.write_all(b"\"")?;
-        writer.write_all(value.value.as_bytes())?;
-        writer.write_all(b"\"")
+        writer("\"")?;
+        writer(&value.value)?;
+        writer("\"")
     } else {
-        writer.write_all(value.value.as_bytes())
+        writer(&value.value)
     }
 }
 
-/// Writes a [`Value`] to a [`Write`].
+/// Writes a [`Value`].
 ///
 /// # Errors
 ///
-/// Fails if the underlying [`Write`] returns an error.
-fn write_value<W: Write>(value: &Value, writer: &mut W) -> io::Result<()> {
-    writer.write_all(value.value.as_bytes())
+/// Fails if the writer function returns an error.
+fn write_value<E, W>(value: &Value, writer: &mut W) -> Result<(), E>
+where
+    W: FnMut(&str) -> Result<(), E>,
+{
+    writer(&value.value)
 }
 
-/// Writes an [`Identifier`] to a [`Write`].
+/// Writes an [`Identifier`].
 ///
 /// # Errors
 ///
-/// Fails if the underlying [`Write`] returns an error.
-fn write_identifier<W: Write>(identifier: &Identifier, writer: &mut W) -> io::Result<()> {
-    writer.write_all(identifier.value.as_bytes())
+/// Fails if the writer function returns an error.
+fn write_identifier<E, W>(identifier: &Identifier, writer: &mut W) -> Result<(), E>
+where
+    W: FnMut(&str) -> Result<(), E>,
+{
+    writer(&identifier.value)
 }
 
 //====================// helper functions for parsing //====================//
