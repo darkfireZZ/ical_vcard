@@ -11,7 +11,6 @@ use std::{
     str,
 };
 
-// TODO improve documentation
 /// Unfolding implementation.
 ///
 /// # Usage
@@ -42,6 +41,11 @@ impl<R: Read> UnfoldingReader<R> {
 
 impl<R: Read> UnfoldingReader<R> {
     // TODO what to do if a line never ends
+    /// Reads and returns the next line
+    ///
+    /// # Errors
+    ///
+    /// Fails if the underlying [`Read`] returns an error or if invalid UTF-8 is encountered.
     pub fn next_line(&mut self) -> Option<Result<&str, io::Error>> {
         #[derive(Eq, PartialEq)]
         enum State {
@@ -109,6 +113,7 @@ impl<R: Read> UnfoldingReader<R> {
         }
     }
 
+    /// Helper function that creates a string from the buffer and returns it.
     fn string_from_buffer(&self) -> io::Result<&str> {
         str::from_utf8(&self.buffer).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
     }
@@ -118,7 +123,7 @@ const FOLDING_LINE_LENGTH: usize = 75;
 
 /// Writes lines to a [`Write`] and folds them as necessary.
 ///
-/// Will only write valid UTF-8 to the underlying [`Write`].
+/// Guarantees that only valid UTF-8 is written to the underlying [`Write`].
 #[derive(Debug)]
 pub struct FoldingWriter<W: Write> {
     writer: W,
@@ -135,7 +140,14 @@ impl<W: Write> FoldingWriter<W> {
         }
     }
 
-    // TODO document
+    /// Appends a string to the current line.
+    ///
+    /// Expects that the string contains no control characters. Will behave unexpectedly if it
+    /// does.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the underlying [`Write`] returns an error.
     pub fn write(&mut self, mut string: &str) -> io::Result<()> {
         debug_assert!(!string.contains(crate::is_control));
 
@@ -154,6 +166,11 @@ impl<W: Write> FoldingWriter<W> {
         self.writer.write_all(string.as_bytes())
     }
 
+    /// Ends the current line.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the underlying [`Write`] returns an error.
     pub fn end_line(&mut self) -> io::Result<()> {
         self.current_line_length = 0;
         self.writer.write_all(b"\r\n")
