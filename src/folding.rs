@@ -139,14 +139,15 @@ impl<W: Write> FoldingWriter<W> {
     pub fn write(&mut self, mut string: &str) -> io::Result<()> {
         debug_assert!(!string.contains(crate::is_control));
 
-        while string.len() >= FOLDING_LINE_LENGTH {
+        while string.len() + self.current_line_length > FOLDING_LINE_LENGTH {
             let fold_index =
-                floor_char_boundary(string, self.current_line_length + FOLDING_LINE_LENGTH);
+                floor_char_boundary(string, FOLDING_LINE_LENGTH - self.current_line_length);
 
             self.writer.write_all(string[..fold_index].as_bytes())?;
             string = &string[fold_index..];
 
-            self.end_line()?;
+            self.writer.write_all(b"\r\n ")?;
+            self.current_line_length = 1;
         }
 
         self.current_line_length += string.len();
@@ -272,6 +273,103 @@ NOTE:And here goes another\r
             }
 
             assert_eq!(counter, expected_count);
+        }
+    }
+
+    mod fold {
+        use {crate::folding::FoldingWriter, std::str};
+
+        #[test]
+        fn write_75_bytes() {
+            let before = "abcdefghijklmno".repeat(5);
+            assert_eq!(before.len(), 75);
+
+            let after = {
+                let mut buffer = Vec::new();
+                let mut writer = FoldingWriter::new(&mut buffer);
+                writer.write(&before).unwrap();
+                str::from_utf8(&buffer).unwrap().to_owned()
+            };
+
+            assert_eq!(after, before);
+        }
+
+        #[test]
+        fn write_once_ascii() {
+            let first_line = "abcde".repeat(15);
+            assert_eq!(first_line.len(), 75);
+
+            let line = "ab".repeat(37);
+            assert_eq!(line.len(), 74);
+
+            let folded_line = {
+                let mut folded_line = line.clone();
+                folded_line.push_str("\r\n ");
+                folded_line
+            };
+
+            let last_line = "this is the last line...";
+
+            for num_lines in [1, 2, 3, 4, 5, 10, 20, 33, 47, 98, 155, 200] {
+                let file = {
+                    let mut file = String::new();
+                    file.push_str(&first_line);
+                    file.push_str(&line.repeat(num_lines - 1));
+                    file.push_str(last_line);
+                    file
+                };
+
+                let expected = {
+                    let mut expected = String::new();
+                    expected.push_str(&first_line);
+                    expected.push_str("\r\n ");
+                    expected.push_str(&folded_line.repeat(num_lines - 1));
+                    expected.push_str(last_line);
+                    expected
+                };
+
+                let actual = {
+                    let mut buffer = Vec::new();
+                    let mut writer = FoldingWriter::new(&mut buffer);
+                    writer.write(&file).unwrap();
+                    str::from_utf8(&buffer).unwrap().to_owned()
+                };
+
+                assert_eq!(actual, expected);
+            }
+        }
+
+        #[test]
+        fn write_once_utf8() {
+            let num_chars_on_last_line = 7;
+
+            let line = {
+                // 🧪 is 4 bytes long, 18 * 4 = 72 bytes should be on each line
+                let mut line = "🧪".repeat(18);
+                line.push_str("\r\n ");
+                line
+            };
+
+            let last_line = "🧪".repeat(num_chars_on_last_line);
+
+            for num_lines in [1, 2, 3, 4, 5, 11, 54, 101] {
+                let file = "🧪".repeat(18 * num_lines + num_chars_on_last_line);
+
+                let expected = {
+                    let mut expected = line.repeat(num_lines);
+                    expected.push_str(&last_line);
+                    expected
+                };
+
+                let actual = {
+                    let mut buffer = Vec::new();
+                    let mut writer = FoldingWriter::new(&mut buffer);
+                    writer.write(&file).unwrap();
+                    str::from_utf8(&buffer).unwrap().to_owned()
+                };
+
+                assert_eq!(actual, expected);
+            }
         }
     }
 }
