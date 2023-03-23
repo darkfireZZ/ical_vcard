@@ -7,13 +7,10 @@
 #![warn(missing_docs)]
 
 use {
-    crate::folding::{
-        FoldingWriter,
-        UnfoldingReader,
-    },
+    crate::folding::{FoldingWriter, UnfoldingReader},
     std::{
         fmt::{self, Display},
-        io::{self, BufRead, Write},
+        io::{self, Read, Write},
         iter::Iterator,
     },
     thiserror::Error,
@@ -59,7 +56,7 @@ mod folding;
 ///     value: Value::new(String::from("michelle.depierre@example.com")).unwrap(),
 /// });
 /// ```
-pub fn parse<R: BufRead>(ical_or_vcard_file: R) -> Parse<R> {
+pub fn parse<R: Read>(ical_or_vcard_file: R) -> Parse<R> {
     Parse::new(ical_or_vcard_file)
 }
 
@@ -69,7 +66,10 @@ pub fn parse<R: BufRead>(ical_or_vcard_file: R) -> Parse<R> {
 /// # Errors
 ///
 /// Fails if the [`Write`] returns an error.
-pub fn write<'a, W: Write, I: Iterator<Item = &'a Contentline>>(ical_or_vcard: I, writer: W) -> io::Result<()> {
+pub fn write<'a, W: Write, I: Iterator<Item = &'a Contentline>>(
+    ical_or_vcard: I,
+    writer: W,
+) -> io::Result<()> {
     let mut writer = FoldingWriter::new(writer);
 
     for contentline in ical_or_vcard {
@@ -80,12 +80,16 @@ pub fn write<'a, W: Write, I: Iterator<Item = &'a Contentline>>(ical_or_vcard: I
     Ok(())
 }
 
+/// An [`Iterator`] over [`Contentline`]s.
+///
+/// This struct is generally created by calling [`parse()`]. See the documentation of [`parse()`] for
+/// more information.
 #[derive(Debug)]
-pub struct Parse<R: BufRead> {
+pub struct Parse<R: Read> {
     unfolder: UnfoldingReader<R>,
 }
 
-impl<R: BufRead> Parse<R> {
+impl<R: Read> Parse<R> {
     /// Creates a new [`Parse`].
     fn new(reader: R) -> Self {
         Self {
@@ -94,7 +98,7 @@ impl<R: BufRead> Parse<R> {
     }
 }
 
-impl<R: BufRead> Iterator for Parse<R> {
+impl<R: Read> Iterator for Parse<R> {
     type Item = Result<Contentline, ParseError>;
     fn next(&mut self) -> Option<Self::Item> {
         match self.unfolder.next_line()? {

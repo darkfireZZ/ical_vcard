@@ -7,7 +7,7 @@
 //! [rfc6350sec3_2]: https://www.rfc-editor.org/rfc/rfc6350#section-3.2
 
 use std::{
-    io::{self, BufRead, ErrorKind, Write},
+    io::{self, Read, Write},
     str,
 };
 
@@ -18,130 +18,95 @@ use std::{
 ///
 /// This is implemented as a streaming iterator. Call [`UnfoldingReader::next_line()`] to get a
 /// reference to the next unfolded line. That reference will only be valid until
-/// [`UnfoldingReader::next_line()`] is called again. This means that [`UnfoldingReader`]
-/// cannot implement [`Iterator`], but it can still be used in a very similar manner.
-///
-/// # Some Notes on the Implementation
-///
-/// ###### Unfolding Incorrectly Folded UTF-8
+/// [`UnfoldingReader::next_line()`] as it takes a mutable borrow of the [`UnfoldingReader`].
 ///
 /// This implementation will correctly restore lines that were folded in the middle of a UTF-8
 /// multi-octet sequence.
-///
-/// ###### Line Terminators
-///
-//TODO get rid of this
-///
-/// Note that this implementation is not entirely compliant with [RFC 6350][sec3_2]. [RFC
-/// 6350][sec3_2] specifies that CRLF is the only allowed line terminator while this implementation
-/// also considers LF a line terminator.
-///
-/// [sec3_2]: https://www.rfc-editor.org/rfc/rfc6350#section-3.2
 #[derive(Debug)]
-pub struct UnfoldingReader<R: BufRead> {
-    reader: R,
+pub struct UnfoldingReader<R: Read> {
+    reader: io::Bytes<R>,
     buffer: Vec<u8>,
-    ended: bool,
+    overflow: Option<u8>,
 }
 
-impl<R: BufRead> UnfoldingReader<R> {
+impl<R: Read> UnfoldingReader<R> {
     /// Creates a new [`UnfoldingReader`].
     pub fn new(reader: R) -> Self {
         Self {
-            reader,
+            reader: reader.bytes(),
             buffer: Vec::new(),
-            ended: false,
+            overflow: None,
         }
     }
 }
 
-impl<R: BufRead> From<R> for UnfoldingReader<R> {
-    fn from(reader: R) -> Self {
-        Self::new(reader)
-    }
-}
-
-impl<R: BufRead> UnfoldingReader<R> {
+impl<R: Read> UnfoldingReader<R> {
     // TODO what to do if a line never ends
-    fn read_next_line_into_buffer(&mut self) -> Option<Result<(), io::Error>> {
-        debug_assert!(self.buffer.is_empty());
-        let mut last_was_newline = false;
-        loop {
-            let next_bytes = match self.reader.fill_buf() {
-                Ok(next_bytes) => next_bytes,
-                Err(err) => {
-                    if err.kind() == ErrorKind::Interrupted {
-                        continue;
-                    }
-
-                    return Some(Err(err));
-                }
-            };
-
-            match next_bytes.first() {
-                Some(byte) => {
-                    if last_was_newline {
-                        if *byte == b' ' || *byte == b'\t' {
-                            self.reader.consume(1);
-                            last_was_newline = false;
-                            continue;
-                        }
-
-                        return Some(Ok(()));
-                    }
-                }
-                // stream is exhausted
-                None => return None,
-            }
-
-            let consumed = match memchr::memchr(b'\n', next_bytes) {
-                Some(index) => {
-                    self.buffer.extend_from_slice(&next_bytes[..index]);
-                    if self.buffer.last() == Some(&b'\r') {
-                        self.buffer.pop();
-                    }
-                    last_was_newline = true;
-
-                    index + 1
-                }
-                None => {
-                    self.buffer.extend_from_slice(next_bytes);
-                    last_was_newline = false;
-
-                    next_bytes.len()
-                }
-            };
-
-            self.reader.consume(consumed);
-        }
-    }
-
-    /// Returns the next line. Returns `None` if the end is reached.
-    ///
-    /// # Errors
-    ///
-    /// Will fail if ...
-    ///  - ... an [`io::Error`] occurred.
-    ///  - ... the line is invalid UTF-8.
     pub fn next_line(&mut self) -> Option<Result<&str, io::Error>> {
-        if self.ended {
-            return None;
+        enum Info {
+            None,
+            Cr,
+            Crlf,
         }
 
         self.buffer.clear();
 
-        match self.read_next_line_into_buffer() {
-            // everything fine
-            Some(Ok(())) => (),
-            // an error occurred => return the error
-            Some(Err(err)) => return Some(Err(err)),
-            // reached end of stream, return once more & in next iteration return None
-            None => {
-                self.ended = true;
+        if let Some(overflow) = self.overflow {
+            self.buffer.push(overflow);
+            self.overflow = None;
+        }
+
+        let mut last_byte = Info::None;
+
+        for byte in &mut self.reader {
+            let byte = match byte {
+                Ok(byte) => byte,
+                Err(err) => return Some(Err(err)),
+            };
+
+            match last_byte {
+                Info::None => {
+                    if byte == b'\r' {
+                        last_byte = Info::Cr;
+                    } else {
+                        self.buffer.push(byte);
+                    }
+                }
+                Info::Cr => {
+                    if byte == b'\n' {
+                        last_byte = Info::Crlf;
+                    } else {
+                        self.buffer.push(b'\r');
+                        self.buffer.push(byte);
+                        last_byte = Info::None;
+                    }
+                }
+                Info::Crlf => {
+                    if byte == b' ' || byte == b'\t' {
+                        last_byte = Info::None;
+                    } else {
+                        self.overflow = Some(byte);
+                        return Some(self.string_from_buffer());
+                    }
+                }
             }
         }
 
-        Some(str::from_utf8(&self.buffer).map_err(|_| io::Error::from(io::ErrorKind::InvalidData)))
+        match last_byte {
+            Info::None => {}
+            Info::Cr => self.buffer.push(b'\r'),
+            Info::Crlf => {}
+        }
+
+        if self.buffer.is_empty() {
+            None
+        } else {
+            Some(self.string_from_buffer())
+        }
+    }
+
+    fn string_from_buffer(&self) -> io::Result<&str> {
+        str::from_utf8(&self.buffer).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
     }
 }
 
@@ -160,7 +125,10 @@ pub struct FoldingWriter<W: Write> {
 impl<W: Write> FoldingWriter<W> {
     /// Create a new [`FoldingWriter`].
     pub fn new(writer: W) -> Self {
-        Self { writer, current_line_length: 0 }
+        Self {
+            writer,
+            current_line_length: 0,
+        }
     }
 
     // TODO document
@@ -168,7 +136,8 @@ impl<W: Write> FoldingWriter<W> {
         debug_assert!(!string.contains(crate::is_control));
 
         while string.len() >= FOLDING_LINE_LENGTH {
-            let fold_index = floor_char_boundary(string, self.current_line_length + FOLDING_LINE_LENGTH);
+            let fold_index =
+                floor_char_boundary(string, self.current_line_length + FOLDING_LINE_LENGTH);
 
             self.writer.write_all(string[..fold_index].as_bytes())?;
             string = &string[fold_index..];
@@ -199,6 +168,7 @@ fn floor_char_boundary(s: &str, index: usize) -> usize {
     char_boundary
 }
 
+// TODO rewrite tests
 #[cfg(test)]
 mod tests {
     mod unfold {
@@ -208,7 +178,8 @@ mod tests {
         fn lf_whitespace() {
             let expected = "NOTE:This is a long description that exists on a long line.";
 
-            let folded = "NOTE:This is a long descrip\n tion that\n  exists o\n n a long line.";
+            let folded =
+                "NOTE:This is a long descrip\r\n tion that\r\n  exists o\r\n n a long line.";
 
             let mut unfold = UnfoldingReader::new(folded.as_bytes());
             assert_eq!(
@@ -238,7 +209,7 @@ mod tests {
             let expected = "NOTE:This is a long description that exists on a long line.";
 
             let folded =
-                "NOTE:This is a long descrip\n\ttion that\r\n  exists o\r\n\tn a long line.";
+                "NOTE:This is a long descrip\r\n\ttion that\r\n  exists o\r\n\tn a long line.";
 
             let mut unfold = UnfoldingReader::new(folded.as_bytes());
             assert_eq!(
@@ -263,7 +234,7 @@ mod tests {
             let shitty_vcard = {
                 let mut builder = "愿原力".as_bytes().to_owned();
                 builder.push(228);
-                builder.extend_from_slice(b"\n\t");
+                builder.extend_from_slice(b"\r\n\t");
                 builder.push(184);
                 builder.push(142);
                 builder.extend_from_slice("你同在".as_bytes());
@@ -295,11 +266,11 @@ mod tests {
         #[test]
         fn test() {
             let example = "\
-NOTE:This is a long descrip
- tion that exists o
- n a long line.
-NOTE:And here goes another
-  long description on anoth
+NOTE:This is a long descrip\r
+ tion that exists o\r
+ n a long line.\r
+NOTE:And here goes another\r
+  long description on anoth\r
  er long line.";
 
             let mut expected = [
@@ -322,8 +293,8 @@ NOTE:And here goes another
             ];
 
             let folded = "\
-NOTE:This is a long descripti\n\ton that exists on a long line.
-ANOTHER-NOTE:This is another \r\n long description that exists on a\n  long line";
+NOTE:This is a long descripti\r\n\ton that exists on a long line.\r
+ANOTHER-NOTE:This is another \r\n long description that exists on a\r\n  long line";
 
             let mut unfold = UnfoldingReader::new(folded.as_bytes());
             assert_eq!(
