@@ -43,7 +43,8 @@ impl<R: Read> UnfoldingReader<R> {
 impl<R: Read> UnfoldingReader<R> {
     // TODO what to do if a line never ends
     pub fn next_line(&mut self) -> Option<Result<&str, io::Error>> {
-        enum Info {
+        #[derive(Eq, PartialEq)]
+        enum State {
             None,
             Cr,
             Crlf,
@@ -51,12 +52,17 @@ impl<R: Read> UnfoldingReader<R> {
 
         self.buffer.clear();
 
+        let mut state = State::None;
+
         if let Some(overflow) = self.overflow {
-            self.buffer.push(overflow);
+            if overflow == b'\r' {
+                state = State::Cr;
+            } else {
+                self.buffer.push(overflow);
+            }
+
             self.overflow = None;
         }
-
-        let mut last_byte = Info::None;
 
         for byte in &mut self.reader {
             let byte = match byte {
@@ -64,26 +70,26 @@ impl<R: Read> UnfoldingReader<R> {
                 Err(err) => return Some(Err(err)),
             };
 
-            match last_byte {
-                Info::None => {
+            match state {
+                State::None => {
                     if byte == b'\r' {
-                        last_byte = Info::Cr;
+                        state = State::Cr;
                     } else {
                         self.buffer.push(byte);
                     }
                 }
-                Info::Cr => {
+                State::Cr => {
                     if byte == b'\n' {
-                        last_byte = Info::Crlf;
+                        state = State::Crlf;
                     } else {
                         self.buffer.push(b'\r');
                         self.buffer.push(byte);
-                        last_byte = Info::None;
+                        state = State::None;
                     }
                 }
-                Info::Crlf => {
+                State::Crlf => {
                     if byte == b' ' || byte == b'\t' {
-                        last_byte = Info::None;
+                        state = State::None;
                     } else {
                         self.overflow = Some(byte);
                         return Some(self.string_from_buffer());
@@ -92,16 +98,14 @@ impl<R: Read> UnfoldingReader<R> {
             }
         }
 
-        match last_byte {
-            Info::None => {}
-            Info::Cr => self.buffer.push(b'\r'),
-            Info::Crlf => {}
+        if state == State::Cr {
+            self.buffer.push(b'\r');
         }
 
-        if self.buffer.is_empty() {
-            None
-        } else {
+        if !self.buffer.is_empty() || state == State::Crlf {
             Some(self.string_from_buffer())
+        } else {
+            None
         }
     }
 
@@ -168,71 +172,44 @@ fn floor_char_boundary(s: &str, index: usize) -> usize {
     char_boundary
 }
 
-// TODO rewrite tests
 #[cfg(test)]
 mod tests {
     mod unfold {
         use crate::folding::UnfoldingReader;
 
         #[test]
-        fn lf_whitespace() {
+        fn single_line_spaces() {
             let expected = "NOTE:This is a long description that exists on a long line.";
 
             let folded =
                 "NOTE:This is a long descrip\r\n tion that\r\n  exists o\r\n n a long line.";
 
             let mut unfold = UnfoldingReader::new(folded.as_bytes());
-            assert_eq!(
-                unfold.next_line().expect("is some").expect("is ok"),
-                expected
-            );
+
+            assert_eq!(unfold.next_line().unwrap().unwrap(), expected);
             assert!(unfold.next_line().is_none());
         }
 
         #[test]
-        fn crlf_tab() {
+        fn single_line_tabs() {
             let expected = "NOTE:This is a long description that exists on a long line.";
 
             let folded =
                 "NOTE:This is a long descrip\r\n\ttion that\r\n\t exists o\r\n\tn a long line.";
 
             let mut unfold = UnfoldingReader::new(folded.as_bytes());
-            assert_eq!(
-                unfold.next_line().expect("is some").expect("is ok"),
-                expected
-            );
+
+            assert_eq!(unfold.next_line().unwrap().unwrap(), expected);
             assert!(unfold.next_line().is_none());
         }
 
         #[test]
-        fn crlf_lf_whitespace_tab_mixed() {
-            let expected = "NOTE:This is a long description that exists on a long line.";
-
-            let folded =
-                "NOTE:This is a long descrip\r\n\ttion that\r\n  exists o\r\n\tn a long line.";
-
-            let mut unfold = UnfoldingReader::new(folded.as_bytes());
-            assert_eq!(
-                unfold.next_line().expect("is some").expect("is ok"),
-                expected
-            );
-            assert!(unfold.next_line().is_none());
-        }
-
-        // This tests a note in 3.2 of RFC 6350:
-        //
-        // ```
-        // Note: It is possible for very simple implementations to generate
-        // improperly folded lines in the middle of a UTF-8 multi-octet
-        // sequence. For this reason, implementations SHOULD unfold lines in
-        // such a way as to properly restore the original sequence.
-        // ```
-        #[test]
-        fn invalid_utf8_parsed_correctly() {
+        fn invalid_utf8_0() {
             let expected = "愿原力与你同在";
 
             let shitty_vcard = {
-                let mut builder = "愿原力".as_bytes().to_owned();
+                let mut builder = Vec::new();
+                builder.extend_from_slice("愿原力".as_bytes());
                 builder.push(228);
                 builder.extend_from_slice(b"\r\n\t");
                 builder.push(184);
@@ -242,70 +219,59 @@ mod tests {
             };
 
             let mut unfold = UnfoldingReader::new(shitty_vcard.as_slice());
-            assert_eq!(
-                unfold.next_line().expect("is some").expect("is ok"),
-                expected
-            );
+
+            assert_eq!(unfold.next_line().unwrap().unwrap(), expected);
             assert!(unfold.next_line().is_none());
         }
 
         #[test]
-        fn invalid_utf8_2() {
+        fn invalid_utf8_1() {
             let not_so_funny =
-                ['\u{f0}', '\u{9f}', '\r', '\n', ' ', '\u{98}', '\u{82}'].map(|c| c as u8);
+                ['\u{f0}', '\u{9f}', '\r', '\n', '\t', '\u{98}', '\u{82}'].map(|c| c as u8);
 
             let mut reader = UnfoldingReader::new(not_so_funny.as_slice());
-            let unfolded = reader
-                .next_line()
-                .expect("there is a line")
-                .expect("no errors occurred");
+            let unfolded = reader.next_line().unwrap().unwrap();
 
             assert_eq!(unfolded, "😂");
         }
 
         #[test]
-        fn test() {
-            let example = "\
+        fn multiple_lines() {
+            let folded = "\
 NOTE:This is a long descrip\r
- tion that exists o\r
+\ttion that exists o\r
  n a long line.\r
 NOTE:And here goes another\r
   long description on anoth\r
- er long line.";
+\ter long line.";
 
-            let mut expected = [
+            let unfolded = [
                 "NOTE:This is a long description that exists on a long line.",
                 "NOTE:And here goes another long description on another long line.",
-            ]
-            .into_iter();
+            ];
 
-            let mut reader = UnfoldingReader::new(example.as_bytes());
-            while let Some(next_line) = reader.next_line() {
-                assert_eq!(next_line.unwrap(), expected.next().unwrap());
+            let mut reader = UnfoldingReader::new(folded.as_bytes());
+            for expected in unfolded {
+                let actual = reader.next_line().unwrap().unwrap();
+                assert_eq!(actual, expected);
             }
+            assert!(reader.next_line().is_none());
         }
 
         #[test]
-        fn multi_line_test() {
-            let expected = vec![
-                "NOTE:This is a long description that exists on a long line.",
-                "ANOTHER-NOTE:This is another long description that exists on a long line",
-            ];
+        fn a_bunch_of_crlfs() {
+            let expected_count = 10;
 
-            let folded = "\
-NOTE:This is a long descripti\r\n\ton that exists on a long line.\r
-ANOTHER-NOTE:This is another \r\n long description that exists on a\r\n  long line";
+            let mut counter = 0;
 
-            let mut unfold = UnfoldingReader::new(folded.as_bytes());
-            assert_eq!(
-                unfold.next_line().expect("is some").expect("is ok"),
-                expected[0]
-            );
-            assert_eq!(
-                unfold.next_line().expect("is some").expect("is ok"),
-                expected[1]
-            );
-            assert!(unfold.next_line().is_none());
+            let string = "\r\n".repeat(expected_count);
+            let mut reader = UnfoldingReader::new(string.as_bytes());
+            while let Some(next_line) = reader.next_line() {
+                assert_eq!(next_line.unwrap(), "");
+                counter += 1;
+            }
+
+            assert_eq!(counter, expected_count);
         }
     }
 }
