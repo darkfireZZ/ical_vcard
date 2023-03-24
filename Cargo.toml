@@ -6,3 +6,6 @@ edition = "2021"
 [dependencies]
 memchr = "2.5.0"
 thiserror = "1.0.38"
+
+[dev-dependencies]
+proptest = "1.1.0"

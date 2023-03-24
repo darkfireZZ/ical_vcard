@@ -142,13 +142,15 @@ impl<W: Write> FoldingWriter<W> {
 
     /// Appends a string to the current line.
     ///
-    /// Expects that the string contains no control characters. Will behave unexpectedly if it
-    /// does.
+    /// Expects that the first character of the string is not a space (`' '`) and not a tab (`'\t'`)
+    /// and that the string contains no control characters other than tabs. This function will
+    /// behave unexpectedly if above conditions are not met.
     ///
     /// # Errors
     ///
     /// Fails if the underlying [`Write`] returns an error.
     pub fn write(&mut self, mut string: &str) -> io::Result<()> {
+        debug_assert!(!string.starts_with([' ', '\t']));
         debug_assert!(!string.contains(crate::is_control));
 
         while string.len() + self.current_line_length > FOLDING_LINE_LENGTH {
@@ -194,6 +196,45 @@ fn floor_char_boundary(s: &str, index: usize) -> usize {
 mod tests {
     mod unfold {
         use crate::folding::UnfoldingReader;
+
+        #[test]
+        fn empty() {
+            assert!(UnfoldingReader::new("".as_bytes()).next_line().is_none());
+        }
+
+        #[test]
+        fn first_line_empty() {
+            let file = "\r\nsecond line is not empty";
+
+            let expected_line_1 = "";
+            let expected_line_2 = "second line is not empty";
+
+            let mut reader = UnfoldingReader::new(file.as_bytes());
+
+            let actual_line_1 = reader.next_line().unwrap().unwrap().to_owned();
+            assert_eq!(actual_line_1, expected_line_1);
+
+            let actual_line_2 = reader.next_line().unwrap().unwrap().to_owned();
+            assert_eq!(actual_line_2, expected_line_2);
+
+            assert!(reader.next_line().is_none());
+        }
+
+        #[test]
+        fn just_newlines() {
+            for num_lines in [0, 1, 2, 3, 4, 7, 14, 543, 2345] {
+                let file = "\r\n".repeat(num_lines);
+                let mut reader = UnfoldingReader::new(file.as_bytes());
+
+                let mut counter = 0;
+                while let Some(next_line) = reader.next_line() {
+                    assert!(next_line.unwrap().is_empty());
+                    counter += 1;
+                }
+
+                assert_eq!(counter, num_lines);
+            }
+        }
 
         #[test]
         fn single_line_spaces() {
@@ -297,6 +338,18 @@ NOTE:And here goes another\r
         use {crate::folding::FoldingWriter, std::str};
 
         #[test]
+        fn empty() {
+            let mut buffer = Vec::new();
+
+            let mut writer = FoldingWriter::new(&mut buffer);
+            for _ in 0..100 {
+                writer.write("").unwrap();
+            }
+
+            assert!(buffer.is_empty());
+        }
+
+        #[test]
         fn write_75_bytes() {
             let before = "abcdefghijklmno".repeat(5);
             assert_eq!(before.len(), 75);
@@ -386,6 +439,72 @@ NOTE:And here goes another\r
                 };
 
                 assert_eq!(actual, expected);
+            }
+        }
+    }
+
+    mod proptests {
+        use {
+            crate::{FoldingWriter, UnfoldingReader},
+            proptest::{prop_assert, prop_assert_eq, proptest},
+            std::str,
+        };
+
+        /// A regex that will match any line that can be written by a [`FoldingWriter`].
+        ///
+        /// See [`FoldingWriter::write`] for more information.
+        const VALID_LINE: &'static str = r"(?:[^\p{C} ][\P{C}\t]*)?";
+
+        proptest! {
+            #[test]
+            fn folding_is_correct(lines in proptest::collection::vec(VALID_LINE, 1..100)) {
+                let written = {
+                    let mut buffer = Vec::new();
+                    let mut writer = FoldingWriter::new(&mut buffer);
+                    for line in &lines {
+                        writer.write(line).unwrap();
+                        writer.end_line().unwrap();
+                    }
+
+                    str::from_utf8(&buffer).unwrap().to_owned()
+                };
+
+                let mut previous_line_length = 0;
+                for line in written.split("\r\n") {
+                    assert!(line.len() <= 75);
+
+                    // if the line is folded
+                    if line.starts_with([' ', '\t']) {
+                        let first_char_len = line[1..].chars().next().map_or(0, char::len_utf8);
+                        assert!(first_char_len + previous_line_length > 75);
+                    }
+
+                    previous_line_length = line.len();
+                }
+            }
+        }
+
+        proptest! {
+            #[test]
+            fn fold_and_unfold_random(lines in proptest::collection::vec(VALID_LINE, 1..100)) {
+                let written = {
+                    let mut buffer = Vec::new();
+                    let mut writer = FoldingWriter::new(&mut buffer);
+                    for line in &lines {
+                        writer.write(line).unwrap();
+                        writer.end_line().unwrap();
+                    }
+                    prop_assert!(str::from_utf8(&buffer).is_ok());
+                    buffer
+                };
+
+                let mut reader = UnfoldingReader::new(written.as_slice());
+                for original_line in &lines {
+                    let read_line = reader.next_line().unwrap().unwrap();
+                    prop_assert_eq!(read_line, original_line);
+                }
+
+                prop_assert!(reader.next_line().is_none());
             }
         }
     }
