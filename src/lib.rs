@@ -11,7 +11,7 @@ use {
     std::{
         fmt::{self, Display},
         io::{self, Read, Write},
-        iter::Iterator,
+        iter::{self, Iterator},
     },
     thiserror::Error,
 };
@@ -308,9 +308,9 @@ impl ParamValue {
     ///
     /// # Errors
     ///
-    /// Fails if the argument contains control characters other than horizontal tabs (`'\t'`).
+    /// Fails if the argument contains control characters other than horizontal tabs (`'\t'`) and
+    /// linefeeds (`'\n'`).
     pub fn new(value: String) -> Result<Self, InvalidParamValue> {
-        // TODO implement RFC 6868 conversion
         if value.contains(is_control) {
             Err(InvalidParamValue)
         } else {
@@ -458,12 +458,9 @@ fn parse_param_value(contentline: &mut &str) -> Result<ParamValue, IntermediateP
         parse_paramtext(contentline)
     };
 
-    Ok(ParamValue {
-        value: param_value.to_owned(),
-    })
+    Ok(ParamValue { value: param_value })
 }
 
-// TODO implement RFC 6868
 /// Parses a `quoted-string`.
 ///
 /// Expects that the first character of the argument is a double quote (`"`). Will behave
@@ -476,9 +473,7 @@ fn parse_param_value(contentline: &mut &str) -> Result<ParamValue, IntermediateP
 /// ```
 ///
 /// [rfc5545]: https://www.rfc-editor.org/rfc/rfc5545
-fn parse_quoted_string<'a, 'b>(
-    contentline: &'a mut &'b str,
-) -> Result<&'b str, IntermediateParsingError> {
+fn parse_quoted_string(contentline: &mut &str) -> Result<String, IntermediateParsingError> {
     debug_assert!(contentline.starts_with('"'));
 
     *contentline = &contentline[1..];
@@ -487,7 +482,7 @@ fn parse_quoted_string<'a, 'b>(
         .find(|c| !is_qsafe_char(c))
         .ok_or(IntermediateParsingError)?;
     if &contentline[quoted_string_length..quoted_string_length + 1] == "\"" {
-        let quoted_string = &contentline[..quoted_string_length];
+        let quoted_string = parse_param_value_rfc6868(&contentline[..quoted_string_length]);
         *contentline = &contentline[quoted_string_length + 1..];
         Ok(quoted_string)
     } else {
@@ -495,7 +490,6 @@ fn parse_quoted_string<'a, 'b>(
     }
 }
 
-// TODO implement RFC 6868
 /// Parses a `paramtext`.
 ///
 /// ABNF from [RFC 5545][rfc5545]:
@@ -505,19 +499,45 @@ fn parse_quoted_string<'a, 'b>(
 /// ```
 ///
 /// [rfc5545]: https://www.rfc-editor.org/rfc/rfc5545
-fn parse_paramtext<'a, 'b>(contentline: &'a mut &'b str) -> &'b str {
+fn parse_paramtext(contentline: &mut &str) -> String {
     let paramtext_length = contentline
         .find(|c| !is_safe_char(c))
         .unwrap_or(contentline.len());
-    let paramtext = &contentline[..paramtext_length];
+
+    let paramtext = parse_param_value_rfc6868(&contentline[..paramtext_length]);
+
     *contentline = &contentline[paramtext_length..];
 
     paramtext
 }
 
+/// Takes a `paramtext` of the value of a `quoted-string` and returns a [`String`] where all the
+/// escape sequences defined in [RFC 6868][rfc6868] are parsed correctly.
+///
+/// [rfc6868]: https://www.rfc-editor.org/rfc/rfc6868
+fn parse_param_value_rfc6868(param_value: &str) -> String {
+    debug_assert!(param_value.chars().all(is_qsafe_char));
+
+    match param_value.find('^') {
+        Some(index_of_first_caret) => iter::once(&param_value[..index_of_first_caret])
+            .chain(
+                param_value[index_of_first_caret + 1..]
+                    .split('^')
+                    .flat_map(|substring| match substring.get(0..1) {
+                        Some("n") => ["\n", &substring[1..]],
+                        Some("'") => ["\"", &substring[1..]],
+                        Some("^") => ["^", &substring[1..]],
+                        Some(_) | None => ["^", substring],
+                    }),
+            )
+            .collect(),
+        None => param_value.to_owned(),
+    }
+}
+
 /// Parses a [`Value`].
 ///
-/// # Errors
+/// # Errors
 ///
 /// Fails if the argument contains control characters other than horizontal tabs (see also
 /// [`is_control()`]).
@@ -603,7 +623,6 @@ where
     Ok(())
 }
 
-// TODO implement RFC 6868
 /// Writes a single parameter value.
 ///
 /// # Errors
@@ -615,11 +634,33 @@ where
 {
     if value.value.contains(|c| c == ';' || c == ':' || c == '.') {
         writer("\"")?;
-        writer(&value.value)?;
+        write_param_value_rfc6868(&value.value, writer)?;
         writer("\"")
     } else {
-        writer(&value.value)
+        write_param_value_rfc6868(&value.value, writer)
     }
+}
+
+/// Writes a `paramtext` or a `quoted-string` and escapes characters as specified in [RFC
+/// 6868][rfc6868].
+///
+/// [rfc6868]: https://www.rfc-editor.org/rfc/rfc6868
+fn write_param_value_rfc6868<E, W>(mut value: &str, writer: &mut W) -> Result<(), E>
+where
+    W: FnMut(&str) -> Result<(), E>,
+{
+    while let Some(index) = value.find(['\n', '^', '"']) {
+        writer(&value[..index])?;
+        match &value[index..index + 1] {
+            "\n" => writer("^n"),
+            "^" => writer("^^"),
+            "\"" => writer("^'"),
+            _ => unreachable!(),
+        }?;
+        value = &value[index + 1..];
+    }
+
+    writer(value)
 }
 
 /// Writes a [`Value`].
