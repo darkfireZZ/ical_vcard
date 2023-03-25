@@ -696,7 +696,7 @@ fn write_identifier<E, W>(identifier: &Identifier, writer: &mut W) -> Result<(),
 where
     W: FnMut(&str) -> Result<(), E>,
 {
-    writer(&identifier.value)
+    writer(&identifier.value.to_ascii_uppercase())
 }
 
 //====================// helper functions for parsing //====================//
