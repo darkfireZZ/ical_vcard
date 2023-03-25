@@ -11,7 +11,7 @@ use {
     std::{
         fmt::{self, Display},
         io::{self, Read, Write},
-        iter::{self, Iterator},
+        iter::Iterator,
     },
     thiserror::Error,
 };
@@ -297,7 +297,7 @@ impl Display for InvalidParam {
 /// A value of a [`Param`].
 ///
 /// This is a wrapper around a [`String`] that contains no control characters except horizontal
-/// tabs (`'\t'`).
+/// tabs (`'\t'`) and linefeeds (`'\n'`).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ParamValue {
     value: String,
@@ -311,7 +311,7 @@ impl ParamValue {
     /// Fails if the argument contains control characters other than horizontal tabs (`'\t'`) and
     /// linefeeds (`'\n'`).
     pub fn new(value: String) -> Result<Self, InvalidParamValue> {
-        if value.contains(is_control) {
+        if value.contains(|c| is_control(c) && c != '\n') {
             Err(InvalidParamValue)
         } else {
             Ok(Self { value })
@@ -515,24 +515,36 @@ fn parse_paramtext(contentline: &mut &str) -> String {
 /// escape sequences defined in [RFC 6868][rfc6868] are parsed correctly.
 ///
 /// [rfc6868]: https://www.rfc-editor.org/rfc/rfc6868
-fn parse_param_value_rfc6868(param_value: &str) -> String {
+fn parse_param_value_rfc6868(mut param_value: &str) -> String {
     debug_assert!(param_value.chars().all(is_qsafe_char));
 
-    match param_value.find('^') {
-        Some(index_of_first_caret) => iter::once(&param_value[..index_of_first_caret])
-            .chain(
-                param_value[index_of_first_caret + 1..]
-                    .split('^')
-                    .flat_map(|substring| match substring.get(0..1) {
-                        Some("n") => ["\n", &substring[1..]],
-                        Some("'") => ["\"", &substring[1..]],
-                        Some("^") => ["^", &substring[1..]],
-                        Some(_) | None => ["^", substring],
-                    }),
-            )
-            .collect(),
-        None => param_value.to_owned(),
+    let mut result = String::with_capacity(param_value.len());
+
+    while let Some(index) = param_value.find('^') {
+        result.push_str(&param_value[..index]);
+        match param_value.get(index + 1..index + 2) {
+            Some(escaped_char) => {
+                match escaped_char {
+                    "n" => result.push('\n'),
+                    "'" => result.push('\"'),
+                    "^" => result.push('^'),
+                    other => {
+                        result.push('^');
+                        result.push_str(other);
+                    }
+                }
+                param_value = &param_value[index + 2..];
+            }
+            None => {
+                result.push('^');
+                param_value = &param_value[index + 1..];
+            }
+        }
     }
+
+    result.push_str(param_value);
+
+    result
 }
 
 /// Parses a [`Value`].
@@ -739,4 +751,186 @@ fn is_control(c: char) -> bool {
 /// Checks whether a [`char`] is alphanumeric or a dash (`'-'`).
 fn is_identifier_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '-'
+}
+
+#[cfg(test)]
+mod tests {
+    mod parse {
+        use {
+            crate::{Contentline, Identifier, Param, ParamValue, Value},
+            std::iter,
+        };
+
+        #[test]
+        fn name_and_value() {
+            let contentline = "NOTE:This is a note.";
+            let parsed = crate::parse(contentline.as_bytes())
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+
+            assert_eq!(parsed.len(), 1);
+            assert_eq!(
+                parsed[0],
+                Contentline {
+                    group: None,
+                    name: Identifier::new(String::from("NOTE")).unwrap(),
+                    params: Vec::new(),
+                    value: Value::new(String::from("This is a note.")).unwrap(),
+                }
+            );
+        }
+
+        #[test]
+        fn group_name_params_value() {
+            let contentline =
+                "test-group.TEST-CASE;test-param=PARAM1;another-test-param=PARAM2:value";
+            let parsed = crate::parse(contentline.as_bytes())
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+
+            assert_eq!(parsed.len(), 1);
+            assert_eq!(
+                parsed[0],
+                Contentline {
+                    group: Some(Identifier::new(String::from("test-group")).unwrap()),
+                    name: Identifier::new(String::from("TEST-CASE")).unwrap(),
+                    params: vec![
+                        Param::new(
+                            Identifier::new(String::from("test-param")).unwrap(),
+                            vec![ParamValue::new(String::from("PARAM1")).unwrap()]
+                        )
+                        .unwrap(),
+                        Param::new(
+                            Identifier::new(String::from("another-test-param")).unwrap(),
+                            vec![ParamValue::new(String::from("PARAM2")).unwrap()]
+                        )
+                        .unwrap(),
+                    ],
+                    value: Value::new(String::from("value")).unwrap(),
+                }
+            );
+        }
+
+        #[test]
+        fn empty_value() {
+            let empty_value = "EMPTY-VALUE:";
+            let parsed = crate::parse(empty_value.as_bytes())
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+
+            assert_eq!(parsed.len(), 1);
+            assert_eq!(
+                parsed[0],
+                Contentline {
+                    group: None,
+                    name: Identifier::new(String::from("EMPTY-VALUE")).unwrap(),
+                    params: Vec::new(),
+                    value: Value::new(String::new()).unwrap(),
+                }
+            );
+        }
+
+        #[test]
+        fn empty_param() {
+            let empty_param = "EMPTY-PARAM;paramtext=;quoted-string=\"\";multiple=,,,,\"\",\"\",,\"\",,,\"\":value";
+            let parsed = crate::parse(empty_param.as_bytes())
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+
+            assert_eq!(parsed.len(), 1);
+            assert_eq!(
+                parsed[0],
+                Contentline {
+                    group: None,
+                    name: Identifier::new(String::from("EMPTY-PARAM")).unwrap(),
+                    params: vec![
+                        Param::new(
+                            Identifier::new(String::from("paramtext")).unwrap(),
+                            vec![ParamValue::new(String::new()).unwrap()]
+                        )
+                        .unwrap(),
+                        Param::new(
+                            Identifier::new(String::from("quoted-string")).unwrap(),
+                            vec![ParamValue::new(String::new()).unwrap()]
+                        )
+                        .unwrap(),
+                        Param::new(
+                            Identifier::new(String::from("multiple")).unwrap(),
+                            iter::repeat(ParamValue::new(String::new()).unwrap())
+                                .take(11)
+                                .collect()
+                        )
+                        .unwrap(),
+                    ],
+                    value: Value::new(String::from("value")).unwrap(),
+                }
+            );
+        }
+
+        #[test]
+        fn case_insensitivity() {
+            let contentline0 = "Group.lowerUPPER;PaRaM=parameter value:value";
+            let contentline1 = "group.LOWERupper;PARAm=parameter value:value";
+
+            let parsed0 = crate::parse(contentline0.as_bytes())
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            let parsed1 = crate::parse(contentline1.as_bytes())
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+
+            assert_eq!(parsed0, parsed1);
+            assert_eq!(parsed0.len(), 1);
+        }
+
+        #[test]
+        fn rfc6868() {
+            let contentline = "RFC6868-TEST;caret=^^;newline=^n;double-quote=^';all-in-quotes=\"^^^n^'\";weird=^^^^n;others=^g^5^k^?^%^&^a:value";
+            let parsed = crate::parse(contentline.as_bytes())
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+
+            assert_eq!(parsed.len(), 1);
+            assert_eq!(
+                parsed[0],
+                Contentline {
+                    group: None,
+                    name: Identifier::new(String::from("RFC6868-TEST")).unwrap(),
+                    params: vec![
+                        Param::new(
+                            Identifier::new(String::from("caret")).unwrap(),
+                            vec![ParamValue::new(String::from("^")).unwrap()]
+                        )
+                        .unwrap(),
+                        Param::new(
+                            Identifier::new(String::from("newline")).unwrap(),
+                            vec![ParamValue::new(String::from("\n")).unwrap()]
+                        )
+                        .unwrap(),
+                        Param::new(
+                            Identifier::new(String::from("double-quote")).unwrap(),
+                            vec![ParamValue::new(String::from("\"")).unwrap()]
+                        )
+                        .unwrap(),
+                        Param::new(
+                            Identifier::new(String::from("all-in-quotes")).unwrap(),
+                            vec![ParamValue::new(String::from("^\n\"")).unwrap()]
+                        )
+                        .unwrap(),
+                        Param::new(
+                            Identifier::new(String::from("weird")).unwrap(),
+                            vec![ParamValue::new(String::from("^^n")).unwrap()]
+                        )
+                        .unwrap(),
+                        Param::new(
+                            Identifier::new(String::from("others")).unwrap(),
+                            vec![ParamValue::new(String::from("^g^5^k^?^%^&^a")).unwrap()]
+                        )
+                        .unwrap(),
+                    ],
+                    value: Value::new(String::from("value")).unwrap(),
+                }
+            );
+        }
+    }
 }
