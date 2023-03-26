@@ -28,7 +28,6 @@ birthdays.
 ```rust
 use std::collections::HashMap;
 
-# fn main() -> Result<(), Box<dyn std::error::Error>> {
 let vcard_file = "\
 BEGIN:VCARD\r
 FN:Mark Daniels\r
@@ -46,7 +45,8 @@ END:VCARD\r
 ".as_bytes();
 
 let birthdays: HashMap<_, _> = ical_vcard::parse(vcard_file)
-    .collect::<Result<Vec<_>, _>>()?
+    .collect::<Result<Vec<_>, _>>()
+    .expect("valid vcard file")
     .split(|contentline| contentline.name == "BEGIN" && contentline.value == "VCARD")
     .flat_map(|vcard| {
         let name = vcard
@@ -69,9 +69,6 @@ let birthdays: HashMap<_, _> = ical_vcard::parse(vcard_file)
 assert_eq!(birthdays["Peter Smith"], "19770525");
 assert_eq!(birthdays["Jack Black"], "19800521");
 assert_eq!(birthdays["Mark Daniels"], "19830525");
-#
-# Ok(())
-# }
 ```
 
 ### Example: Names & Email Addresses
@@ -81,7 +78,6 @@ This example illustrates how to write a vCard file.
 ```rust
 use ical_vcard::{Contentline, Identifier, Param, ParamValue, Value};
 
-# fn main() -> Result<(), Box<dyn std::error::Error>> {
 let names = [
     "Aristotle",
     "Plato",
@@ -129,7 +125,7 @@ let contentlines = names.into_iter().flat_map(|name| [
 
 let vcard = {
     let mut buffer = Vec::new();
-    ical_vcard::write(contentlines, &mut buffer)?;
+    ical_vcard::write(contentlines, &mut buffer).expect("write to Vec should cause no errors");
     buffer
 };
 
@@ -157,9 +153,6 @@ END:VCARD\r
 ".as_bytes();
 
 assert_eq!(vcard, expected);
-#
-# Ok(())
-# }
 ```
 
 [crate]: #
