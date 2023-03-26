@@ -142,18 +142,20 @@ pub fn parse<R: Read>(reader: R) -> Parse<R> {
 /// # Errors
 ///
 /// Fails if `writer` returns an error.
-pub fn write<C, I, W>(contentlines: C, writer: W) -> io::Result<()>
+pub fn write<C, I, W>(contentlines: C, mut writer: W) -> io::Result<()>
 where
     C: IntoIterator<Item = I>,
     I: Borrow<Contentline>,
     W: Write,
 {
-    let mut writer = FoldingWriter::new(writer);
+    let mut folder = FoldingWriter::new(&mut writer);
 
     for line in contentlines {
-        line.borrow().write(|s| writer.write(s))?;
-        writer.end_line()?;
+        line.borrow().write(|s| folder.write(s))?;
+        folder.end_line()?;
     }
+
+    writer.flush()?;
 
     Ok(())
 }
