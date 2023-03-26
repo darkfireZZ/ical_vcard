@@ -52,16 +52,22 @@ mod folding;
 /// # }
 /// ```
 ///
-/// # Errors
+/// # Performance
 ///
-/// A [`ParseError`] will be returned by the iterator if `reader` returned an [`io::Error`] or if
-/// an invalid contentline was encountered.
+/// Depending on the [`Read`] implementation used, each call to [`reader::read()`][Read::read] (of
+/// which this function does many), may involve a system call, and therefore, using something that
+/// implements [`io::BufRead`], such as [`io::BufReader`], will be more efficient.
 ///
 /// # Security
 ///
 /// [`Parse`] reads the next line of the underlying [`Read`] into memory to parse it. If
 /// `reader` doesn't contain any (CRLF) line breaks and is sufficiently large (or infinite),
 /// attempting to read the next contentline will completely fill up the heap memory.
+///
+/// # Errors
+///
+/// A [`ParseError`] will be returned by the iterator if `reader` returned an [`io::Error`] or if
+/// an invalid contentline was encountered.
 pub fn parse<R: Read>(reader: R) -> Parse<R> {
     Parse::new(reader)
 }
@@ -126,6 +132,12 @@ pub fn parse<R: Read>(reader: R) -> Parse<R> {
 /// # Ok(())
 /// # }
 /// ```
+///
+/// # Performance
+///
+/// It can be excessively inefficient to work directly with something that implements [`Write`]. For
+/// example, every call to write on [`std::net::TcpStream`] results in a system call. Wrapping
+/// `writer` in a [`io::BufWriter`] may improve performance significantly.
 ///
 /// # Errors
 ///
