@@ -18,14 +18,16 @@ use {
 
 mod folding;
 
-// TODO improve documentation & add examples
 /// Parses an iCalendar or vCard file.
 ///
 /// Returns an [`Iterator`] of [`Result<Contentline, ParseError>`].
 ///
+/// The following example illustrates how to parse a simple vCard file:
+///
 /// ```
-/// # use ical_vcard::{Contentline, Identifier, Param, ParamValue, ParseError, Value};
-/// #
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// use ical_vcard::{Contentline, Identifier, Param, ParamValue, Value};
+///
 /// let vcard_file = String::from("\
 /// BEGIN:VCARD\r
 /// VERSION:4.0\r
@@ -37,49 +39,105 @@ mod folding;
 /// END:VCARD\r
 /// ");
 ///
-/// let parsed_vcard = ical_vcard::parse(vcard_file.as_bytes()).collect::<Result<Vec<_>, _>>().unwrap();
+/// let contentlines = ical_vcard::parse(vcard_file.as_bytes()).collect::<Result<Vec<_>, _>>()?;
 ///
-/// assert_eq!(parsed_vcard[2], Contentline {
-///     group: Some(Identifier::new(String::from("namegroup")).unwrap()),
-///     name: Identifier::new(String::from("FN")).unwrap(),
-///     params: Vec::new(),
-///     value: Value::new(String::from("Michelle de Pierre")).unwrap(),
-/// });
+/// let email_line = contentlines.iter().find(|contentline| contentline.name == "EMAIL").unwrap();
+/// assert_eq!(email_line.value, "michelle.depierre@example.com");
 ///
-/// assert_eq!(parsed_vcard[4], Contentline {
-///     group: None,
-///     name: Identifier::new(String::from("EMAIL")).unwrap(),
-///     params: vec![Param::new(
-///         Identifier::new(String::from("TYPE")).unwrap(),
-///         vec![ParamValue::new(String::from("work")).unwrap()]
-///     ).unwrap()],
-///     value: Value::new(String::from("michelle.depierre@example.com")).unwrap(),
-/// });
+/// let third_line = &contentlines[2];
+/// assert_eq!(third_line.name, "FN");
+/// assert_eq!(third_line.value, "Michelle de Pierre");
+/// #
+/// # Ok(())
+/// # }
 /// ```
+///
+/// # Errors
+///
+/// A [`ParseError`] will be returned by the iterator if `reader` returned an [`io::Error`] or if
+/// an invalid contentline was encountered.
 ///
 /// # Security
 ///
 /// [`Parse`] reads the next line of the underlying [`Read`] into memory to parse it. If
-/// `ical_or_vcard_file` doesn't contain any (CRLF) line breaks and is sufficiently large (or
-/// infinite), attempting to read the next contentline will completely fill up the heap memory.
-pub fn parse<R: Read>(ical_or_vcard_file: R) -> Parse<R> {
-    Parse::new(ical_or_vcard_file)
+/// `reader` doesn't contain any (CRLF) line breaks and is sufficiently large (or infinite),
+/// attempting to read the next contentline will completely fill up the heap memory.
+pub fn parse<R: Read>(reader: R) -> Parse<R> {
+    Parse::new(reader)
 }
 
-// TODO improve documentation & add examples
 /// Writes an iCalendar or vCard file.
+///
+/// The following example illustrates how to write a simple vCard file:
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// #
+/// use ical_vcard::{Contentline, Identifier, Param, ParamValue, Value};
+///
+/// let contentlines = [
+///     Contentline {
+///         group: None,
+///         name: Identifier::try_from("BEGIN")?,
+///         params: Vec::new(),
+///         value: Value::try_from("VCARD")?,
+///     },
+///     Contentline {
+///         group: None,
+///         name: Identifier::try_from("FN")?,
+///         params: Vec::new(),
+///         value: Value::try_from("Mr. John Example")?,
+///     },
+///     Contentline {
+///         group: None,
+///         name: Identifier::try_from("BDAY")?,
+///         params: vec![Param::new(
+///             Identifier::try_from("VALUE")?,
+///             vec![ParamValue::try_from("date-and-or-time")?],
+///         )?],
+///         value: Value::try_from("20230326")?,
+///     },
+///     Contentline {
+///         group: None,
+///         name: Identifier::try_from("END")?,
+///         params: Vec::new(),
+///         value: Value::try_from("VCARD")?,
+///     },
+/// ];
+///
+/// // For the sake of simplicity and testability, the vCard is written to a Vec. However, in a
+/// // real application, one would probably write it to disk or do some further processing (e.g.
+/// // compression)
+/// let vcard = {
+///     let mut buffer = Vec::new();
+///     ical_vcard::write(contentlines.iter(), &mut buffer)?;
+///     buffer
+/// };
+///
+/// let expected = "\
+/// BEGIN:VCARD\r
+/// FN:Mr. John Example\r
+/// BDAY;VALUE=date-and-or-time:20230326\r
+/// END:VCARD\r
+/// ".as_bytes();
+///
+/// assert_eq!(vcard, expected);
+/// #
+/// # Ok(())
+/// # }
+/// ```
 ///
 /// # Errors
 ///
-/// Fails if the [`Write`] returns an error.
+/// Fails if `writer` returns an error.
 pub fn write<'a, W: Write, I: Iterator<Item = &'a Contentline>>(
-    ical_or_vcard: I,
+    contentlines: I,
     writer: W,
 ) -> io::Result<()> {
     let mut writer = FoldingWriter::new(writer);
 
-    for contentline in ical_or_vcard {
-        contentline.write(|s| writer.write(s))?;
+    for line in contentlines {
+        line.write(|s| writer.write(s))?;
         writer.end_line()?;
     }
 
@@ -232,6 +290,7 @@ impl Display for ParseContentlineError {
     }
 }
 
+// TODO check that identifiers have length >= 1
 /// A [`String`] wrapper that may only contain alphabetic chars, digits and dashes (`-`).
 #[derive(Clone, Debug, Eq)]
 pub struct Identifier {
@@ -276,7 +335,25 @@ impl TryFrom<&str> for Identifier {
 
 impl PartialEq for Identifier {
     fn eq(&self, other: &Self) -> bool {
-        self.value.eq_ignore_ascii_case(&other.value)
+        *self == other.value
+    }
+}
+
+impl PartialEq<String> for Identifier {
+    fn eq(&self, other: &String) -> bool {
+        *self == other.as_str()
+    }
+}
+
+impl PartialEq<&str> for Identifier {
+    fn eq(&self, other: &&str) -> bool {
+        *self == **other
+    }
+}
+
+impl PartialEq<str> for Identifier {
+    fn eq(&self, other: &str) -> bool {
+        self.value.eq_ignore_ascii_case(other)
     }
 }
 
@@ -334,7 +411,7 @@ impl Display for InvalidParam {
 ///
 /// This is a wrapper around a [`String`] that contains no control characters except horizontal
 /// tabs (`'\t'`) and linefeeds (`'\n'`).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq)]
 pub struct ParamValue {
     value: String,
 }
@@ -369,6 +446,30 @@ impl TryFrom<&str> for ParamValue {
     }
 }
 
+impl PartialEq for ParamValue {
+    fn eq(&self, other: &Self) -> bool {
+        *self == other.value
+    }
+}
+
+impl PartialEq<String> for ParamValue {
+    fn eq(&self, other: &String) -> bool {
+        *self == other.as_str()
+    }
+}
+
+impl PartialEq<&str> for ParamValue {
+    fn eq(&self, other: &&str) -> bool {
+        *self == **other
+    }
+}
+
+impl PartialEq<str> for ParamValue {
+    fn eq(&self, other: &str) -> bool {
+        self.value == other
+    }
+}
+
 /// Indicates a failed attempt to create a [`ParamValue`].
 ///
 /// This error type is returned if one attempts to create a [`ParamValue`] from a string that
@@ -386,7 +487,7 @@ impl Display for InvalidParamValue {
 ///
 /// This is a wrapper around a [`String`] that contains no control characters except horizontal
 /// tabs (`'\t'`).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq)]
 pub struct Value {
     value: String,
 }
@@ -415,6 +516,30 @@ impl TryFrom<&str> for Value {
     type Error = InvalidValue;
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         Self::new(value.to_owned())
+    }
+}
+
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        *self == other.value
+    }
+}
+
+impl PartialEq<String> for Value {
+    fn eq(&self, other: &String) -> bool {
+        *self == other.as_str()
+    }
+}
+
+impl PartialEq<&str> for Value {
+    fn eq(&self, other: &&str) -> bool {
+        *self == **other
+    }
+}
+
+impl PartialEq<str> for Value {
+    fn eq(&self, other: &str) -> bool {
+        self.value == other
     }
 }
 
@@ -657,7 +782,6 @@ fn parse_identifier(contentline: &mut &str) -> Result<Identifier, IntermediatePa
 struct IntermediateParsingError;
 
 //====================// contentline writing //====================//
-// TODO improve documentation of this section
 
 /// Writes a parameter list.
 ///
@@ -679,6 +803,8 @@ where
 }
 
 /// Writes a list of parameter values.
+///
+/// Expects that `values` is non-empty.
 ///
 /// # Errors
 ///
@@ -719,6 +845,10 @@ where
 
 /// Writes a `paramtext` or a `quoted-string` and escapes characters as specified in [RFC
 /// 6868][rfc6868].
+///
+/// # Errors
+///
+/// Fails if the writer function returns an error.
 ///
 /// [rfc6868]: https://www.rfc-editor.org/rfc/rfc6868
 fn write_param_value_rfc6868<E, W>(mut value: &str, writer: &mut W) -> Result<(), E>
