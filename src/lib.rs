@@ -306,8 +306,7 @@ impl Display for ParseContentlineError {
     }
 }
 
-// TODO check that identifiers have length >= 1
-/// A [`String`] wrapper that may only contain alphabetic chars, digits and dashes (`-`).
+/// Wraps a non-empty [`String`] that may only contain alphabetic chars, digits and dashes (`-`).
 #[derive(Clone, Debug, Eq, Ord, PartialOrd)]
 pub struct Identifier {
     value: String,
@@ -318,10 +317,10 @@ impl Identifier {
     ///
     /// # Errors
     ///
-    /// Fails if the argument contains any characters which are
-    /// neither alphabetic, digits or dash (`-`).
+    /// Fails if the argument is empty or if it contains any characters that are neither
+    /// alphabetic, digits or dash (`-`).
     pub fn new(identifier: String) -> Result<Self, InvalidIdentifier> {
-        if identifier.chars().all(is_identifier_char) {
+        if !identifier.is_empty() && identifier.chars().all(is_identifier_char) {
             Ok(Self { value: identifier })
         } else {
             Err(InvalidIdentifier)
