@@ -217,13 +217,18 @@ pub struct ParseContentlineError {
     invalid_contentline: String,
 }
 
+impl ParseContentlineError {
+    /// Returns the contentline that caused the error.
+    pub fn invalid_contentline(&self) -> &str {
+        &self.invalid_contentline
+    }
+}
+
 impl Display for ParseContentlineError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        // TODO: cap size of contentline in display
-        // TODO: If the parser encounters an invalid contentline, it will return the invalid
-        // contentline along with a generic error message. There could be different error messages
-        // explaining why a contentline is invalid.
-        write!(f, "invalid contentline: \"{}\"", self.invalid_contentline)
+        // TODO: There could be different error messages explaining which part of the contentline
+        // is invalid
+        write!(f, "invalid contentline")
     }
 }
 
