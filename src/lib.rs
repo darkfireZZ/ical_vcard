@@ -1,6 +1,4 @@
-// TODO add documentation
-//!
-
+#![doc = include_str!("../README.md")]
 #![deny(unsafe_code)]
 #![deny(clippy::all)]
 // TODO implement cargo lints: #![warn(clippy::cargo)]
@@ -9,7 +7,9 @@
 use {
     crate::folding::{FoldingWriter, UnfoldingReader},
     std::{
+        borrow::Borrow,
         fmt::{self, Display},
+        hash::{Hash, Hasher},
         io::{self, Read, Write},
         iter::Iterator,
     },
@@ -130,14 +130,16 @@ pub fn parse<R: Read>(reader: R) -> Parse<R> {
 /// # Errors
 ///
 /// Fails if `writer` returns an error.
-pub fn write<'a, W: Write, I: Iterator<Item = &'a Contentline>>(
-    contentlines: I,
-    writer: W,
-) -> io::Result<()> {
+pub fn write<C, I, W>(contentlines: C, writer: W) -> io::Result<()>
+where
+    C: IntoIterator<Item = I>,
+    I: Borrow<Contentline>,
+    W: Write,
+{
     let mut writer = FoldingWriter::new(writer);
 
     for line in contentlines {
-        line.write(|s| writer.write(s))?;
+        line.borrow().write(|s| writer.write(s))?;
         writer.end_line()?;
     }
 
@@ -190,9 +192,9 @@ pub enum ParseError {
 /// 1. A `name`
 /// 2. A `value`
 /// 3. Optionally, a `group` which can be used to group related content lines
-/// 4. Optionally, a list of parameters to add metainformation or additional details that don't fit
-///    into `value` field particularly well
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// 4. Optionally, a list of parameters to add meta-information or additional details that don't fit
+///    into the `value` field particularly well
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Contentline {
     /// The group of the content line.
     pub group: Option<Identifier>,
@@ -292,7 +294,7 @@ impl Display for ParseContentlineError {
 
 // TODO check that identifiers have length >= 1
 /// A [`String`] wrapper that may only contain alphabetic chars, digits and dashes (`-`).
-#[derive(Clone, Debug, Eq)]
+#[derive(Clone, Debug, Eq, Ord, PartialOrd)]
 pub struct Identifier {
     value: String,
 }
@@ -310,6 +312,11 @@ impl Identifier {
         } else {
             Err(InvalidIdentifier)
         }
+    }
+
+    /// Returns the string value of this [`ParamValue`].
+    pub fn value(&self) -> &str {
+        &self.value
     }
 }
 
@@ -330,6 +337,16 @@ impl TryFrom<&str> for Identifier {
     type Error = InvalidIdentifier;
     fn try_from(identifier: &str) -> Result<Self, Self::Error> {
         Self::new(identifier.to_owned())
+    }
+}
+
+impl Hash for Identifier {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // implementation is mostly the same as in std::str
+        for c in self.value.as_bytes() {
+            c.to_ascii_uppercase().hash(state);
+        }
+        state.write_u8(0xff);
     }
 }
 
@@ -374,7 +391,7 @@ impl Display for InvalidIdentifier {
 }
 
 /// A single parameter of a [`Contentline`].
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Param {
     name: Identifier,
     values: Vec<ParamValue>,
@@ -411,7 +428,7 @@ impl Display for InvalidParam {
 ///
 /// This is a wrapper around a [`String`] that contains no control characters except horizontal
 /// tabs (`'\t'`) and linefeeds (`'\n'`).
-#[derive(Clone, Debug, Eq)]
+#[derive(Clone, Debug, Eq, Ord, PartialOrd)]
 pub struct ParamValue {
     value: String,
 }
@@ -430,6 +447,17 @@ impl ParamValue {
             Ok(Self { value })
         }
     }
+
+    /// Returns the string value of this [`ParamValue`].
+    pub fn value(&self) -> &str {
+        &self.value
+    }
+}
+
+impl Display for ParamValue {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", &self.value)
+    }
 }
 
 impl TryFrom<String> for ParamValue {
@@ -443,6 +471,12 @@ impl TryFrom<&str> for ParamValue {
     type Error = InvalidParamValue;
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         Self::new(value.to_owned())
+    }
+}
+
+impl Hash for ParamValue {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.value.hash(state)
     }
 }
 
@@ -487,7 +521,7 @@ impl Display for InvalidParamValue {
 ///
 /// This is a wrapper around a [`String`] that contains no control characters except horizontal
 /// tabs (`'\t'`).
-#[derive(Clone, Debug, Eq)]
+#[derive(Clone, Debug, Eq, Ord, PartialOrd)]
 pub struct Value {
     value: String,
 }
@@ -503,6 +537,17 @@ impl Value {
             Ok(Self { value })
         }
     }
+
+    /// Returns the string value of this [`Value`].
+    pub fn value(&self) -> &str {
+        &self.value
+    }
+}
+
+impl Display for Value {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", &self.value)
+    }
 }
 
 impl TryFrom<String> for Value {
@@ -516,6 +561,12 @@ impl TryFrom<&str> for Value {
     type Error = InvalidValue;
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         Self::new(value.to_owned())
+    }
+}
+
+impl Hash for Value {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.value.hash(state)
     }
 }
 
