@@ -933,4 +933,188 @@ mod tests {
             );
         }
     }
+
+    mod write {
+        use {
+            crate::{Contentline, Identifier, Param, ParamValue, Value},
+            std::{iter, str},
+        };
+
+        #[test]
+        fn name_and_value() {
+            let contentline = Contentline {
+                group: None,
+                name: Identifier::new(String::from("NAME")).unwrap(),
+                params: Vec::new(),
+                value: Value::new(String::from("VALUE")).unwrap(),
+            };
+
+            let expected = "NAME:VALUE\r\n";
+
+            let actual = {
+                let mut buffer = Vec::new();
+                crate::write(iter::once(&contentline), &mut buffer).unwrap();
+                str::from_utf8(&buffer).unwrap().to_owned()
+            };
+
+            assert_eq!(&actual, expected);
+        }
+
+        #[test]
+        fn group_name_params_value() {
+            let contentline = Contentline {
+                group: Some(Identifier::new(String::from("TEST-GROUP")).unwrap()),
+                name: Identifier::new(String::from("TEST-NAME")).unwrap(),
+                params: vec![
+                    Param::new(
+                        Identifier::new(String::from("PARAM-1")).unwrap(),
+                        vec![ParamValue::new(String::from("param value 1")).unwrap()],
+                    )
+                    .unwrap(),
+                    Param::new(
+                        Identifier::new(String::from("PARAM-2")).unwrap(),
+                        vec![ParamValue::new(String::from("param value of parameter: 2")).unwrap()],
+                    )
+                    .unwrap(),
+                ],
+                value: Value::new(String::from("test value \"with quotes\"")).unwrap(),
+            };
+
+            let expected = "\
+TEST-GROUP.TEST-NAME;PARAM-1=param value 1;PARAM-2=\"param value of paramete\r
+ r: 2\":test value \"with quotes\"\r
+";
+
+            let actual = {
+                let mut buffer = Vec::new();
+                crate::write(iter::once(&contentline), &mut buffer).unwrap();
+                str::from_utf8(&buffer).unwrap().to_owned()
+            };
+
+            assert_eq!(&actual, expected);
+        }
+
+        #[test]
+        fn identfiers_converted_to_uppercase() {
+            let contentline = Contentline {
+                group: Some(Identifier::new(String::from("lower-group")).unwrap()),
+                name: Identifier::new(String::from("name")).unwrap(),
+                params: vec![Param::new(
+                    Identifier::new(String::from("PaRaM")).unwrap(),
+                    vec![ParamValue::new(String::from("param value")).unwrap()],
+                )
+                .unwrap()],
+                value: Value::new(String::from("value")).unwrap(),
+            };
+
+            let expected = "LOWER-GROUP.NAME;PARAM=param value:value\r\n";
+
+            let actual = {
+                let mut buffer = Vec::new();
+                crate::write(iter::once(&contentline), &mut buffer).unwrap();
+                str::from_utf8(&buffer).unwrap().to_owned()
+            };
+
+            assert_eq!(&actual, expected);
+        }
+
+        #[test]
+        fn empty_value() {
+            let contentline = Contentline {
+                group: None,
+                name: Identifier::new(String::from("NAME")).unwrap(),
+                params: Vec::new(),
+                value: Value::new(String::new()).unwrap(),
+            };
+
+            let expected = "NAME:\r\n";
+
+            let actual = {
+                let mut buffer = Vec::new();
+                crate::write(iter::once(&contentline), &mut buffer).unwrap();
+                str::from_utf8(&buffer).unwrap().to_owned()
+            };
+
+            assert_eq!(&actual, expected);
+        }
+
+        #[test]
+        fn empty_param() {
+            let num_params = 15;
+
+            let contentline = Contentline {
+                group: None,
+                name: Identifier::new(String::from("NAME")).unwrap(),
+                params: vec![Param::new(
+                    Identifier::new(String::from("PARAM")).unwrap(),
+                    iter::repeat(ParamValue::new(String::from("")).unwrap())
+                        .take(num_params)
+                        .collect(),
+                )
+                .unwrap()],
+                value: Value::new(String::from("value")).unwrap(),
+            };
+
+            let expected = {
+                let mut expected = String::from("NAME;PARAM=");
+                expected.push_str(&",".repeat(num_params - 1));
+                expected.push_str(":value\r\n");
+                expected
+            };
+
+            let actual = {
+                let mut buffer = Vec::new();
+                crate::write(iter::once(&contentline), &mut buffer).unwrap();
+                str::from_utf8(&buffer).unwrap().to_owned()
+            };
+
+            assert_eq!(actual, expected);
+        }
+
+        #[test]
+        fn rfc6868() {
+            let contentline = Contentline {
+                group: None,
+                name: Identifier::new(String::from("RFC6868-TEST")).unwrap(),
+                params: vec![
+                    Param::new(
+                        Identifier::new(String::from("CARET")).unwrap(),
+                        vec![ParamValue::new(String::from("^")).unwrap()],
+                    )
+                    .unwrap(),
+                    Param::new(
+                        Identifier::new(String::from("NEWLINE")).unwrap(),
+                        vec![ParamValue::new(String::from("\n")).unwrap()],
+                    )
+                    .unwrap(),
+                    Param::new(
+                        Identifier::new(String::from("DOUBLE-QUOTE")).unwrap(),
+                        vec![ParamValue::new(String::from("\"")).unwrap()],
+                    )
+                    .unwrap(),
+                    Param::new(
+                        Identifier::new(String::from("ALL-IN-QUOTES")).unwrap(),
+                        vec![ParamValue::new(String::from("^;\n;\"")).unwrap()],
+                    )
+                    .unwrap(),
+                    Param::new(
+                        Identifier::new(String::from("WEIRD")).unwrap(),
+                        vec![ParamValue::new(String::from("^^n")).unwrap()],
+                    )
+                    .unwrap(),
+                ],
+                value: Value::new(String::from("value")).unwrap(),
+            };
+
+            let expected = "RFC6868-TEST;CARET=^^;NEWLINE=^n;DOUBLE-QUOTE=^';ALL-IN-QUOTES=\"^^;^n;^'\";W\r\n EIRD=^^^^n:value\r\n";
+
+            let actual = {
+                let mut buffer = Vec::new();
+                crate::write(iter::once(&contentline), &mut buffer).unwrap();
+                str::from_utf8(&buffer).unwrap().to_owned()
+            };
+
+            assert_eq!(&actual, expected);
+        }
+    }
 }
