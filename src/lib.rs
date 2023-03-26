@@ -56,6 +56,12 @@ mod folding;
 ///     value: Value::new(String::from("michelle.depierre@example.com")).unwrap(),
 /// });
 /// ```
+///
+/// # Security
+///
+/// [`Parse`] reads the next line of the underlying [`Read`] into memory to parse it. If
+/// `ical_or_vcard_file` doesn't contain any (CRLF) line breaks and is sufficiently large (or
+/// infinite), attempting to read the next contentline will completely fill up the heap memory.
 pub fn parse<R: Read>(ical_or_vcard_file: R) -> Parse<R> {
     Parse::new(ical_or_vcard_file)
 }
@@ -205,7 +211,6 @@ impl Display for Contentline {
     }
 }
 
-// TODO maybe also add some contextual information.
 /// Indicates a failure to parse a [`Contentline`].
 #[derive(Debug, Error)]
 pub struct ParseContentlineError {
@@ -214,7 +219,10 @@ pub struct ParseContentlineError {
 
 impl Display for ParseContentlineError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        // TODO cap size of contentline in display
+        // TODO: cap size of contentline in display
+        // TODO: If the parser encounters an invalid contentline, it will return the invalid
+        // contentline along with a generic error message. There could be different error messages
+        // explaining why a contentline is invalid.
         write!(f, "invalid contentline: \"{}\"", self.invalid_contentline)
     }
 }

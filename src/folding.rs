@@ -21,6 +21,13 @@ use std::{
 ///
 /// This implementation will correctly restore lines that were folded in the middle of a UTF-8
 /// multi-octet sequence.
+///
+/// # Security
+///
+/// [`UnfoldingReader::next_line()`] reads the next line of the underlying [`Read`] into memory. If
+/// an [`UnfoldingReader`] is constructed from a [`Read`] that doesn't contain any (CRLF) line
+/// breaks and is sufficiently large (or infinite), attempting to read the next line will cause the
+/// heap to fill up completely.
 #[derive(Debug)]
 pub struct UnfoldingReader<R: Read> {
     reader: io::Bytes<R>,
@@ -40,7 +47,6 @@ impl<R: Read> UnfoldingReader<R> {
 }
 
 impl<R: Read> UnfoldingReader<R> {
-    // TODO what to do if a line never ends
     /// Reads and returns the next line
     ///
     /// # Errors
@@ -127,8 +133,7 @@ const FOLDING_LINE_LENGTH: usize = 75;
 #[derive(Debug)]
 pub struct FoldingWriter<W: Write> {
     writer: W,
-    // TODO this could be a u8
-    current_line_length: usize,
+    current_line_length: u8,
 }
 
 impl<W: Write> FoldingWriter<W> {
@@ -153,9 +158,11 @@ impl<W: Write> FoldingWriter<W> {
         debug_assert!(!string.starts_with([' ', '\t']));
         debug_assert!(!string.contains(crate::is_control));
 
-        while string.len() + self.current_line_length > FOLDING_LINE_LENGTH {
-            let fold_index =
-                floor_char_boundary(string, FOLDING_LINE_LENGTH - self.current_line_length);
+        while string.len() + usize::from(self.current_line_length) > FOLDING_LINE_LENGTH {
+            let fold_index = floor_char_boundary(
+                string,
+                FOLDING_LINE_LENGTH - usize::from(self.current_line_length),
+            );
 
             self.writer.write_all(string[..fold_index].as_bytes())?;
             string = &string[fold_index..];
@@ -164,7 +171,8 @@ impl<W: Write> FoldingWriter<W> {
             self.current_line_length = 1;
         }
 
-        self.current_line_length += string.len();
+        self.current_line_length += u8::try_from(string.len())
+            .expect("string.len() + self.current_line_length <= FOLDING_LINE_LENGTH = 75");
         self.writer.write_all(string.as_bytes())
     }
 
