@@ -238,6 +238,20 @@ impl Display for Identifier {
     }
 }
 
+impl TryFrom<String> for Identifier {
+    type Error = InvalidIdentifier;
+    fn try_from(identifier: String) -> Result<Self, Self::Error> {
+        Self::new(identifier)
+    }
+}
+
+impl TryFrom<&str> for Identifier {
+    type Error = InvalidIdentifier;
+    fn try_from(identifier: &str) -> Result<Self, Self::Error> {
+        Self::new(identifier.to_owned())
+    }
+}
+
 impl PartialEq for Identifier {
     fn eq(&self, other: &Self) -> bool {
         self.value.eq_ignore_ascii_case(&other.value)
@@ -319,6 +333,20 @@ impl ParamValue {
     }
 }
 
+impl TryFrom<String> for ParamValue {
+    type Error = InvalidParamValue;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl TryFrom<&str> for ParamValue {
+    type Error = InvalidParamValue;
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::new(value.to_owned())
+    }
+}
+
 /// Indicates a failed attempt to create a [`ParamValue`].
 ///
 /// This error type is returned if one attempts to create a [`ParamValue`] from a string that
@@ -351,6 +379,20 @@ impl Value {
         } else {
             Ok(Self { value })
         }
+    }
+}
+
+impl TryFrom<String> for Value {
+    type Error = InvalidValue;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl TryFrom<&str> for Value {
+    type Error = InvalidValue;
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::new(value.to_owned())
     }
 }
 
@@ -773,9 +815,9 @@ mod tests {
                 parsed[0],
                 Contentline {
                     group: None,
-                    name: Identifier::new(String::from("NOTE")).unwrap(),
+                    name: Identifier::try_from("NOTE").unwrap(),
                     params: Vec::new(),
-                    value: Value::new(String::from("This is a note.")).unwrap(),
+                    value: Value::try_from("This is a note.").unwrap(),
                 }
             );
         }
@@ -792,21 +834,21 @@ mod tests {
             assert_eq!(
                 parsed[0],
                 Contentline {
-                    group: Some(Identifier::new(String::from("test-group")).unwrap()),
-                    name: Identifier::new(String::from("TEST-CASE")).unwrap(),
+                    group: Some(Identifier::try_from("test-group").unwrap()),
+                    name: Identifier::try_from("TEST-CASE").unwrap(),
                     params: vec![
                         Param::new(
-                            Identifier::new(String::from("test-param")).unwrap(),
-                            vec![ParamValue::new(String::from("PARAM1")).unwrap()]
+                            Identifier::try_from("test-param").unwrap(),
+                            vec![ParamValue::try_from("PARAM1").unwrap()]
                         )
                         .unwrap(),
                         Param::new(
-                            Identifier::new(String::from("another-test-param")).unwrap(),
-                            vec![ParamValue::new(String::from("PARAM2")).unwrap()]
+                            Identifier::try_from("another-test-param").unwrap(),
+                            vec![ParamValue::try_from("PARAM2").unwrap()]
                         )
                         .unwrap(),
                     ],
-                    value: Value::new(String::from("value")).unwrap(),
+                    value: Value::try_from("value").unwrap(),
                 }
             );
         }
@@ -823,9 +865,9 @@ mod tests {
                 parsed[0],
                 Contentline {
                     group: None,
-                    name: Identifier::new(String::from("EMPTY-VALUE")).unwrap(),
+                    name: Identifier::try_from("EMPTY-VALUE").unwrap(),
                     params: Vec::new(),
-                    value: Value::new(String::new()).unwrap(),
+                    value: Value::try_from("").unwrap(),
                 }
             );
         }
@@ -842,27 +884,27 @@ mod tests {
                 parsed[0],
                 Contentline {
                     group: None,
-                    name: Identifier::new(String::from("EMPTY-PARAM")).unwrap(),
+                    name: Identifier::try_from("EMPTY-PARAM").unwrap(),
                     params: vec![
                         Param::new(
-                            Identifier::new(String::from("paramtext")).unwrap(),
-                            vec![ParamValue::new(String::new()).unwrap()]
+                            Identifier::try_from("paramtext").unwrap(),
+                            vec![ParamValue::try_from("").unwrap()]
                         )
                         .unwrap(),
                         Param::new(
-                            Identifier::new(String::from("quoted-string")).unwrap(),
-                            vec![ParamValue::new(String::new()).unwrap()]
+                            Identifier::try_from("quoted-string").unwrap(),
+                            vec![ParamValue::try_from("").unwrap()]
                         )
                         .unwrap(),
                         Param::new(
-                            Identifier::new(String::from("multiple")).unwrap(),
-                            iter::repeat(ParamValue::new(String::new()).unwrap())
+                            Identifier::try_from("multiple").unwrap(),
+                            iter::repeat(ParamValue::try_from("").unwrap())
                                 .take(11)
                                 .collect()
                         )
                         .unwrap(),
                     ],
-                    value: Value::new(String::from("value")).unwrap(),
+                    value: Value::try_from("value").unwrap(),
                 }
             );
         }
@@ -895,40 +937,40 @@ mod tests {
                 parsed[0],
                 Contentline {
                     group: None,
-                    name: Identifier::new(String::from("RFC6868-TEST")).unwrap(),
+                    name: Identifier::try_from("RFC6868-TEST").unwrap(),
                     params: vec![
                         Param::new(
-                            Identifier::new(String::from("caret")).unwrap(),
-                            vec![ParamValue::new(String::from("^")).unwrap()]
+                            Identifier::try_from("caret").unwrap(),
+                            vec![ParamValue::try_from("^").unwrap()]
                         )
                         .unwrap(),
                         Param::new(
-                            Identifier::new(String::from("newline")).unwrap(),
-                            vec![ParamValue::new(String::from("\n")).unwrap()]
+                            Identifier::try_from("newline").unwrap(),
+                            vec![ParamValue::try_from("\n").unwrap()]
                         )
                         .unwrap(),
                         Param::new(
-                            Identifier::new(String::from("double-quote")).unwrap(),
-                            vec![ParamValue::new(String::from("\"")).unwrap()]
+                            Identifier::try_from("double-quote").unwrap(),
+                            vec![ParamValue::try_from("\"").unwrap()]
                         )
                         .unwrap(),
                         Param::new(
-                            Identifier::new(String::from("all-in-quotes")).unwrap(),
-                            vec![ParamValue::new(String::from("^\n\"")).unwrap()]
+                            Identifier::try_from("all-in-quotes").unwrap(),
+                            vec![ParamValue::try_from("^\n\"").unwrap()]
                         )
                         .unwrap(),
                         Param::new(
-                            Identifier::new(String::from("weird")).unwrap(),
-                            vec![ParamValue::new(String::from("^^n")).unwrap()]
+                            Identifier::try_from("weird").unwrap(),
+                            vec![ParamValue::try_from("^^n").unwrap()]
                         )
                         .unwrap(),
                         Param::new(
-                            Identifier::new(String::from("others")).unwrap(),
-                            vec![ParamValue::new(String::from("^g^5^k^?^%^&^a")).unwrap()]
+                            Identifier::try_from("others").unwrap(),
+                            vec![ParamValue::try_from("^g^5^k^?^%^&^a").unwrap()]
                         )
                         .unwrap(),
                     ],
-                    value: Value::new(String::from("value")).unwrap(),
+                    value: Value::try_from("value").unwrap(),
                 }
             );
         }
@@ -944,9 +986,9 @@ mod tests {
         fn name_and_value() {
             let contentline = Contentline {
                 group: None,
-                name: Identifier::new(String::from("NAME")).unwrap(),
+                name: Identifier::try_from("NAME").unwrap(),
                 params: Vec::new(),
-                value: Value::new(String::from("VALUE")).unwrap(),
+                value: Value::try_from("VALUE").unwrap(),
             };
 
             let expected = "NAME:VALUE\r\n";
@@ -963,21 +1005,21 @@ mod tests {
         #[test]
         fn group_name_params_value() {
             let contentline = Contentline {
-                group: Some(Identifier::new(String::from("TEST-GROUP")).unwrap()),
-                name: Identifier::new(String::from("TEST-NAME")).unwrap(),
+                group: Some(Identifier::try_from("TEST-GROUP").unwrap()),
+                name: Identifier::try_from("TEST-NAME").unwrap(),
                 params: vec![
                     Param::new(
-                        Identifier::new(String::from("PARAM-1")).unwrap(),
-                        vec![ParamValue::new(String::from("param value 1")).unwrap()],
+                        Identifier::try_from("PARAM-1").unwrap(),
+                        vec![ParamValue::try_from("param value 1").unwrap()],
                     )
                     .unwrap(),
                     Param::new(
-                        Identifier::new(String::from("PARAM-2")).unwrap(),
-                        vec![ParamValue::new(String::from("param value of parameter: 2")).unwrap()],
+                        Identifier::try_from("PARAM-2").unwrap(),
+                        vec![ParamValue::try_from("param value of parameter: 2").unwrap()],
                     )
                     .unwrap(),
                 ],
-                value: Value::new(String::from("test value \"with quotes\"")).unwrap(),
+                value: Value::try_from("test value \"with quotes\"").unwrap(),
             };
 
             let expected = "\
@@ -997,14 +1039,14 @@ TEST-GROUP.TEST-NAME;PARAM-1=param value 1;PARAM-2=\"param value of paramete\r
         #[test]
         fn identfiers_converted_to_uppercase() {
             let contentline = Contentline {
-                group: Some(Identifier::new(String::from("lower-group")).unwrap()),
-                name: Identifier::new(String::from("name")).unwrap(),
+                group: Some(Identifier::try_from("lower-group").unwrap()),
+                name: Identifier::try_from("name").unwrap(),
                 params: vec![Param::new(
-                    Identifier::new(String::from("PaRaM")).unwrap(),
-                    vec![ParamValue::new(String::from("param value")).unwrap()],
+                    Identifier::try_from("PaRaM").unwrap(),
+                    vec![ParamValue::try_from("param value").unwrap()],
                 )
                 .unwrap()],
-                value: Value::new(String::from("value")).unwrap(),
+                value: Value::try_from("value").unwrap(),
             };
 
             let expected = "LOWER-GROUP.NAME;PARAM=param value:value\r\n";
@@ -1022,9 +1064,9 @@ TEST-GROUP.TEST-NAME;PARAM-1=param value 1;PARAM-2=\"param value of paramete\r
         fn empty_value() {
             let contentline = Contentline {
                 group: None,
-                name: Identifier::new(String::from("NAME")).unwrap(),
+                name: Identifier::try_from("NAME").unwrap(),
                 params: Vec::new(),
-                value: Value::new(String::new()).unwrap(),
+                value: Value::try_from("").unwrap(),
             };
 
             let expected = "NAME:\r\n";
@@ -1044,15 +1086,15 @@ TEST-GROUP.TEST-NAME;PARAM-1=param value 1;PARAM-2=\"param value of paramete\r
 
             let contentline = Contentline {
                 group: None,
-                name: Identifier::new(String::from("NAME")).unwrap(),
+                name: Identifier::try_from("NAME").unwrap(),
                 params: vec![Param::new(
-                    Identifier::new(String::from("PARAM")).unwrap(),
-                    iter::repeat(ParamValue::new(String::from("")).unwrap())
+                    Identifier::try_from("PARAM").unwrap(),
+                    iter::repeat(ParamValue::try_from("").unwrap())
                         .take(num_params)
                         .collect(),
                 )
                 .unwrap()],
-                value: Value::new(String::from("value")).unwrap(),
+                value: Value::try_from("value").unwrap(),
             };
 
             let expected = {
@@ -1075,35 +1117,35 @@ TEST-GROUP.TEST-NAME;PARAM-1=param value 1;PARAM-2=\"param value of paramete\r
         fn rfc6868() {
             let contentline = Contentline {
                 group: None,
-                name: Identifier::new(String::from("RFC6868-TEST")).unwrap(),
+                name: Identifier::try_from("RFC6868-TEST").unwrap(),
                 params: vec![
                     Param::new(
-                        Identifier::new(String::from("CARET")).unwrap(),
-                        vec![ParamValue::new(String::from("^")).unwrap()],
+                        Identifier::try_from("CARET").unwrap(),
+                        vec![ParamValue::try_from("^").unwrap()],
                     )
                     .unwrap(),
                     Param::new(
-                        Identifier::new(String::from("NEWLINE")).unwrap(),
-                        vec![ParamValue::new(String::from("\n")).unwrap()],
+                        Identifier::try_from("NEWLINE").unwrap(),
+                        vec![ParamValue::try_from("\n").unwrap()],
                     )
                     .unwrap(),
                     Param::new(
-                        Identifier::new(String::from("DOUBLE-QUOTE")).unwrap(),
-                        vec![ParamValue::new(String::from("\"")).unwrap()],
+                        Identifier::try_from("DOUBLE-QUOTE").unwrap(),
+                        vec![ParamValue::try_from("\"").unwrap()],
                     )
                     .unwrap(),
                     Param::new(
-                        Identifier::new(String::from("ALL-IN-QUOTES")).unwrap(),
-                        vec![ParamValue::new(String::from("^;\n;\"")).unwrap()],
+                        Identifier::try_from("ALL-IN-QUOTES").unwrap(),
+                        vec![ParamValue::try_from("^;\n;\"").unwrap()],
                     )
                     .unwrap(),
                     Param::new(
-                        Identifier::new(String::from("WEIRD")).unwrap(),
-                        vec![ParamValue::new(String::from("^^n")).unwrap()],
+                        Identifier::try_from("WEIRD").unwrap(),
+                        vec![ParamValue::try_from("^^n").unwrap()],
                     )
                     .unwrap(),
                 ],
-                value: Value::new(String::from("value")).unwrap(),
+                value: Value::try_from("value").unwrap(),
             };
 
             let expected = "RFC6868-TEST;CARET=^^;NEWLINE=^n;DOUBLE-QUOTE=^';ALL-IN-QUOTES=\"^^;^n;^'\";W\r\n EIRD=^^^^n:value\r\n";
