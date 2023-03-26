@@ -169,7 +169,16 @@ impl Contentline {
         })
     }
 
-    // TODO document
+    /// Writes this [`Contentline`] using a given function.
+    ///
+    /// This implementation has the advantage to be compatible with both the [`io::Write`] trait
+    /// and the [`fmt::Write`] trait. Therefore, this implementation can be used to write a
+    /// [`Contentline`] to a file or any other [`io::Write`], but also to implement
+    /// [`fmt::Display`].
+    ///
+    /// # Errors
+    ///
+    /// Fails if the writer function fails.
     fn write<E, W>(&self, mut writer: W) -> Result<(), E>
     where
         W: FnMut(&str) -> Result<(), E>,
