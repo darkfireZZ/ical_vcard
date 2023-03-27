@@ -10,6 +10,16 @@ built.
 This crate can of course be used to parse iCalendar or vCard files. However, it cannot provide the
 convenience or all of the features a specialized iCalendar or vCard library could.
 
+## Features
+
+ * Content line parser
+ * Content line writer / formatter
+ * Conforms to [RFC 5545][rfc5545] and [RFC 6350][rfc6350]. In particular, the parser and the writer
+   adhere to [section 3.1 of RFC5545][rfc5545_sec3_1] and [section 3 of RFC 6350][rfc6350_sec3],
+   which describe the content line format.
+ * Conforms to [RFC 6868][rfc6868], which updates [RFC 5545][rfc5545] and [RFC 6350][rfc6350] with
+   escape rules for encoding double quotes and line breaks in parameter values.
+
 ## Usage
 
 The main functionality of this crate is provided by 2 functions:
@@ -172,5 +182,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 [iterator]: https://doc.rust-lang.org/stable/std/iter/trait.Iterator.html
 [read]: https://doc.rust-lang.org/stable/std/io/trait.Read.html
 [rfc5545]: https://www.rfc-editor.org/rfc/rfc5545
+[rfc5545_sec3_1]: https://www.rfc-editor.org/rfc/rfc5545#section-3.1
 [rfc6350]: https://www.rfc-editor.org/rfc/rfc6350
+[rfc6350_sec3]: https://www.rfc-editor.org/rfc/rfc6350#section-3
+[rfc6868]: https://www.rfc-editor.org/rfc/rfc6868
 [write]: https://doc.rust-lang.org/stable/std/io/trait.Write.html

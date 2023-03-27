@@ -22,6 +22,15 @@ mod folding;
 ///
 /// Returns an [`Iterator`] of [`Result<Contentline, ParseError>`].
 ///
+/// This implementation will unfold content lines correctly. Even if they were folded in the middle
+/// of a UTF-8 multi-byte character.
+///
+// TODO also allow LF line breaks
+/// Only CRLF sequences are interpreted as linebreaks, both for unfolding and as indicator of the
+/// end of a content line.
+///
+/// # Example
+///
 /// The following example illustrates how to parse a simple vCard file:
 ///
 /// ```
@@ -73,6 +82,13 @@ pub fn parse<R: Read>(reader: R) -> Parse<R> {
 }
 
 /// Writes an iCalendar or vCard file.
+///
+/// All content lines will be folded to lines that are no longer than 75 bytes (not including line
+/// breaks). A CRLF line break is appended to each content line.
+///
+/// This function will always output valid UTF-8 to `writer`.
+///
+/// # Example
 ///
 /// The following example illustrates how to write a simple vCard file:
 ///
