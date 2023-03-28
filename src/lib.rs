@@ -343,9 +343,14 @@ impl Identifier {
         }
     }
 
-    /// Returns the string value of this [`ParamValue`].
+    /// Returns the [`&str`] value of this [`Identifier`].
     pub fn value(&self) -> &str {
         &self.value
+    }
+
+    /// Returns the [`String`] value of this [`Identifier`].
+    pub fn into_value(self) -> String {
+        self.value
     }
 }
 
@@ -477,9 +482,14 @@ impl ParamValue {
         }
     }
 
-    /// Returns the string value of this [`ParamValue`].
+    /// Returns the [`&str`] value of this [`ParamValue`].
     pub fn value(&self) -> &str {
         &self.value
+    }
+
+    /// Returns the [`String`] value of this [`ParamValue`].
+    pub fn into_value(self) -> String {
+        self.value
     }
 }
 
@@ -567,9 +577,14 @@ impl Value {
         }
     }
 
-    /// Returns the string value of this [`Value`].
+    /// Returns the [`&str`] value of this [`Value`].
     pub fn value(&self) -> &str {
         &self.value
+    }
+
+    /// Returns the [`String`] value of this [`Value`].
+    pub fn into_value(self) -> String {
+        self.value
     }
 }
 
