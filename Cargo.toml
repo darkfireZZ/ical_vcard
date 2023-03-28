@@ -2,6 +2,13 @@
 name = "ical_vcard"
 version = "0.1.0"
 edition = "2021"
+authors = ["Nicola Bruhin"]
+description = "parser and writer for the content line format used in vCard and iCalendar"
+readme = "README.md"
+repository = "https://github.com/darkfirezz/ical_vcard"
+license = "MIT OR Apache-2.0"
+keywords = ["ical", "vcard", "parser"]
+categories = ["parser-implementations", "parsing"]
 
 [dependencies]
 thiserror = "1.0.38"

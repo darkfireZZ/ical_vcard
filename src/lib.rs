@@ -1,7 +1,7 @@
 #![doc = include_str!("../README.md")]
 #![deny(unsafe_code)]
 #![deny(clippy::all)]
-// TODO implement cargo lints: #![warn(clippy::cargo)]
+#![warn(clippy::cargo)]
 #![warn(missing_docs)]
 
 use {
