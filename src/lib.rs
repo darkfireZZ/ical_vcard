@@ -7,7 +7,7 @@
 use {
     crate::folding::{FoldingWriter, UnfoldingReader},
     std::{
-        borrow::Borrow,
+        borrow::{Borrow, Cow},
         fmt::{self, Display},
         hash::{Hash, Hasher},
         io::{self, Read, Write},
@@ -20,7 +20,21 @@ mod folding;
 
 /// Parses an iCalendar or vCard file.
 ///
-/// Returns an [`Iterator`] of [`Result<Contentline, ParseError>`].
+/// To achieve minimal memory usage, parsing is done one content line at a time. Use
+/// [`Parser::parse_next_line()`] to parse the next content line.
+///
+/// [`Parser`] also implements [`Iterator`]. This makes it possible to use [`Parser`] in
+/// `for`-loops and apply all of the different [`Iterator`] adapters such as [`Iterator::map()`] and
+/// [`Iterator::filter()`]. Note however that this comes at a cost in performance.
+/// [`Parser::parse_next_line()`] makes a minimal number of heap allocations by reusing the same
+/// internal buffer for all content lines. As the [`Iterator`] trait does not allow items to borrow
+/// from the iterator itself, all items returned by the [`Iterator`] implementation need to be
+/// allocated on the heap.
+///
+/// Depending on the [`Read`] implementation used, each call to [`reader::read()`][Read::read] (of
+/// which this function does many), may involve a system call, and therefore, using something that
+/// implements [`io::BufRead`], such as [`io::BufReader`], to construct the [`Parser`] will be more
+/// efficient.
 ///
 /// This implementation will unfold content lines correctly. Even if they were folded in the middle
 /// of a UTF-8 multi-byte character.
@@ -29,13 +43,20 @@ mod folding;
 /// Only CRLF sequences are interpreted as linebreaks, both for unfolding and as indicator of the
 /// end of a content line.
 ///
+/// # Security
+///
+/// [`Parser::parse_next_line()`] (and hence [`Parser::next()`] too) reads the next line of the
+/// underlying [`Read`] instance into memory to parse it. If the next line is very long (or
+/// infinitely long), attempting to read the next content line will completely fill up the heap
+/// memory.
+///
 /// # Example
 ///
 /// The following example illustrates how to parse a simple vCard file:
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// use ical_vcard::{Contentline, Identifier, Param, ParamValue, Value};
+/// use ical_vcard::{Contentline, Identifier, Param, ParamValue, Parser, Value};
 ///
 /// let vcard_file = String::from("\
 /// BEGIN:VCARD\r
@@ -48,7 +69,7 @@ mod folding;
 /// END:VCARD\r
 /// ");
 ///
-/// let contentlines = ical_vcard::parse(vcard_file.as_bytes()).collect::<Result<Vec<_>, _>>()?;
+/// let contentlines = Parser::new(vcard_file.as_bytes()).collect::<Result<Vec<_>, _>>()?;
 ///
 /// let email_line = contentlines.iter().find(|contentline| contentline.name == "EMAIL").unwrap();
 /// assert_eq!(email_line.value, "michelle.depierre@example.com");
@@ -60,33 +81,66 @@ mod folding;
 /// # Ok(())
 /// # }
 /// ```
-///
-/// # Performance
-///
-/// Depending on the [`Read`] implementation used, each call to [`reader::read()`][Read::read] (of
-/// which this function does many), may involve a system call, and therefore, using something that
-/// implements [`io::BufRead`], such as [`io::BufReader`], will be more efficient.
-///
-/// # Security
-///
-/// [`Parse`] reads the next line of the underlying [`Read`] into memory to parse it. If
-/// `reader` doesn't contain any (CRLF) line breaks and is sufficiently large (or infinite),
-/// attempting to read the next contentline will completely fill up the heap memory.
-///
-/// # Errors
-///
-/// A [`ParseError`] will be returned by the iterator if `reader` returned an [`io::Error`] or if
-/// an invalid contentline was encountered.
-pub fn parse<R: Read>(reader: R) -> Parse<R> {
-    Parse::new(reader)
+#[derive(Debug)]
+pub struct Parser<R: Read> {
+    unfolder: UnfoldingReader<R>,
+}
+
+impl<R: Read> Parser<R> {
+    /// Creates a new [`Parser`].
+    pub fn new(reader: R) -> Self {
+        Self {
+            unfolder: UnfoldingReader::new(reader),
+        }
+    }
+
+    /// Parses the next content line.
+    ///
+    /// Returns [`None`] if the [`Parser`] is exhausted.
+    ///
+    /// # Errors
+    ///
+    /// A [`ParseError`] will be returned if an [`io::Error`] occurred or if a syntactically invalid
+    /// content line was encountered.
+    pub fn parse_next_line(&mut self) -> Option<Result<Contentline, ParseError>> {
+        match self.unfolder.next_line()? {
+            Ok(next_line) => Some(Contentline::parse(next_line).map_err(|err| err.into())),
+            Err(err) => Some(Err(err.into())),
+        }
+    }
+}
+
+impl<R: Read> Iterator for Parser<R> {
+    type Item = Result<Contentline<'static>, ParseError>;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.parse_next_line()
+            .map(|result| result.map(|contentline| contentline.into_owned()))
+    }
+}
+
+/// The error type returned if parsing fails.
+#[derive(Debug, Error)]
+pub enum ParseError {
+    /// An IO error occurred while parsing.
+    #[error(transparent)]
+    IoError(#[from] io::Error),
+    /// An invalid content line was encountered.
+    #[error(transparent)]
+    InvalidContentline(#[from] ParseContentlineError),
 }
 
 /// Writes an iCalendar or vCard file.
 ///
-/// All content lines will be folded to lines that are no longer than 75 bytes (not including line
-/// breaks). A CRLF line break is appended to each content line.
+/// Folds all content lines to lines that are no longer than 75 bytes (not including line breaks). A
+/// CRLF line break is appended to each content line.
 ///
-/// This function will always output valid UTF-8 to `writer`.
+/// [`Writer`] will always output valid UTF-8 to the underlying [`Write`].
+///
+/// # Performance
+///
+/// It can be excessively inefficient to work directly with something that implements [`Write`]. For
+/// example, every call to write on [`std::net::TcpStream`] results in a system call. Wrapping
+/// `writer` in a [`io::BufWriter`] may improve performance significantly.
 ///
 /// # Example
 ///
@@ -95,35 +149,35 @@ pub fn parse<R: Read>(reader: R) -> Parse<R> {
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// #
-/// use ical_vcard::{Contentline, Identifier, Param, ParamValue, Value};
+/// use ical_vcard::{Contentline, Identifier, Param, ParamValue, Value, Writer};
 ///
 /// let contentlines = [
 ///     Contentline {
 ///         group: None,
-///         name: Identifier::try_from("BEGIN")?,
+///         name: Identifier::new("BEGIN")?,
 ///         params: Vec::new(),
-///         value: Value::try_from("VCARD")?,
+///         value: Value::new("VCARD")?,
 ///     },
 ///     Contentline {
 ///         group: None,
-///         name: Identifier::try_from("FN")?,
+///         name: Identifier::new("FN")?,
 ///         params: Vec::new(),
-///         value: Value::try_from("Mr. John Example")?,
+///         value: Value::new("Mr. John Example")?,
 ///     },
 ///     Contentline {
 ///         group: None,
-///         name: Identifier::try_from("BDAY")?,
+///         name: Identifier::new("BDAY")?,
 ///         params: vec![Param::new(
-///             Identifier::try_from("VALUE")?,
-///             vec![ParamValue::try_from("date-and-or-time")?],
+///             Identifier::new("VALUE")?,
+///             vec![ParamValue::new("date-and-or-time")?],
 ///         )?],
-///         value: Value::try_from("20230326")?,
+///         value: Value::new("20230326")?,
 ///     },
 ///     Contentline {
 ///         group: None,
-///         name: Identifier::try_from("END")?,
+///         name: Identifier::new("END")?,
 ///         params: Vec::new(),
-///         value: Value::try_from("VCARD")?,
+///         value: Value::new("VCARD")?,
 ///     },
 /// ];
 ///
@@ -132,7 +186,8 @@ pub fn parse<R: Read>(reader: R) -> Parse<R> {
 /// // compression)
 /// let vcard = {
 ///     let mut buffer = Vec::new();
-///     ical_vcard::write(contentlines.iter(), &mut buffer)?;
+///     let mut writer = Writer::new(&mut buffer);
+///     writer.write_all(contentlines)?;
 ///     buffer
 /// };
 ///
@@ -148,71 +203,67 @@ pub fn parse<R: Read>(reader: R) -> Parse<R> {
 /// # Ok(())
 /// # }
 /// ```
-///
-/// # Performance
-///
-/// It can be excessively inefficient to work directly with something that implements [`Write`]. For
-/// example, every call to write on [`std::net::TcpStream`] results in a system call. Wrapping
-/// `writer` in a [`io::BufWriter`] may improve performance significantly.
-///
-/// # Errors
-///
-/// Fails if `writer` returns an error.
-pub fn write<C, I, W>(contentlines: C, mut writer: W) -> io::Result<()>
-where
-    C: IntoIterator<Item = I>,
-    I: Borrow<Contentline>,
-    W: Write,
-{
-    let mut folder = FoldingWriter::new(&mut writer);
-
-    for line in contentlines {
-        line.borrow().write(|s| folder.write(s))?;
-        folder.end_line()?;
-    }
-
-    writer.flush()?;
-
-    Ok(())
+pub struct Writer<W: Write> {
+    folder: FoldingWriter<W>,
 }
 
-/// An [`Iterator`] over [`Contentline`]s.
-///
-/// This struct is generally created by calling [`parse()`]. See the documentation of [`parse()`] for
-/// more information.
-#[derive(Debug)]
-pub struct Parse<R: Read> {
-    unfolder: UnfoldingReader<R>,
-}
-
-impl<R: Read> Parse<R> {
-    /// Creates a new [`Parse`].
-    fn new(reader: R) -> Self {
+impl<W: Write> Writer<W> {
+    /// Creates a new [`Writer`].
+    ///
+    /// Note that you can also pass `&mut W` instead of `W` for any `W` that implements [`Write`].
+    pub fn new(writer: W) -> Self {
         Self {
-            unfolder: UnfoldingReader::new(reader),
+            folder: FoldingWriter::new(writer),
         }
     }
-}
 
-impl<R: Read> Iterator for Parse<R> {
-    type Item = Result<Contentline, ParseError>;
-    fn next(&mut self) -> Option<Self::Item> {
-        match self.unfolder.next_line()? {
-            Ok(next_line) => Some(Contentline::parse(next_line).map_err(|err| err.into())),
-            Err(err) => Some(Err(err.into())),
-        }
+    /// Writes a single content line.
+    ///
+    /// Flushes the underlying [`Write`] afterwards.
+    ///
+    /// # Errors
+    ///
+    /// Fails in case of an [`io::Error`].
+    pub fn write(&mut self, contentline: &Contentline) -> io::Result<()> {
+        contentline.write(|s| self.folder.write(s))?;
+        self.folder.end_line()?;
+        self.folder.flush()
     }
-}
 
-/// The error type returned if parsing fails.
-#[derive(Debug, Error)]
-pub enum ParseError {
-    /// An IO error occurred while parsing.
-    #[error(transparent)]
-    IoError(#[from] io::Error),
-    /// An invalid content line was encountered.
-    #[error(transparent)]
-    InvalidContentline(#[from] ParseContentlineError),
+    /// Writes a sequence of contentlines.
+    ///
+    /// Flushes the underlying [`Write`] afterwards.
+    ///
+    /// # Errors
+    ///
+    /// Fails in case of an [`io::Error`].
+    pub fn write_all<'a, C, I>(&mut self, contentlines: I) -> io::Result<()>
+    where
+        C: Borrow<Contentline<'a>>,
+        I: IntoIterator<Item = C>,
+    {
+        for line in contentlines {
+            line.borrow().write(|s| self.folder.write(s))?;
+            self.folder.end_line()?;
+        }
+
+        self.folder.flush()
+    }
+
+    /// Returns a reference to the inner [`Write`].
+    pub fn inner(&self) -> &W {
+        self.folder.inner()
+    }
+
+    /// Returns a mutable reference to the inner [`Write`].
+    pub fn inner_mut(&mut self) -> &mut W {
+        self.folder.inner_mut()
+    }
+
+    /// Returns the inner [`Write`]
+    pub fn into_inner(self) -> W {
+        self.folder.into_inner()
+    }
 }
 
 /// The basic unit of a vCard or iCalendar file.
@@ -225,24 +276,24 @@ pub enum ParseError {
 /// 4. Optionally, a list of parameters to add meta-information or additional details that don't fit
 ///    into the `value` field particularly well
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct Contentline {
+pub struct Contentline<'a> {
     /// The group of the content line.
-    pub group: Option<Identifier>,
+    pub group: Option<Identifier<'a>>,
     /// The name of the content line.
-    pub name: Identifier,
+    pub name: Identifier<'a>,
     /// The parameters of the content line.
-    pub params: Vec<Param>,
+    pub params: Vec<Param<'a>>,
     /// The value of the content line.
-    pub value: Value,
+    pub value: Value<'a>,
 }
 
-impl Contentline {
+impl<'a> Contentline<'a> {
     /// Parses a [`Contentline`].
     ///
     /// # Errors
     ///
     /// Fails if the given content line is incorrectly formatted.
-    fn parse(mut contentline: &str) -> Result<Self, ParseContentlineError> {
+    fn parse(mut contentline: &'a str) -> Result<Self, ParseContentlineError> {
         let error = || ParseContentlineError {
             invalid_contentline: contentline.to_owned(),
         };
@@ -293,9 +344,22 @@ impl Contentline {
 
         Ok(())
     }
+
+    /// Allocates the fields of this [`Contentline`].
+    pub fn into_owned(self) -> Contentline<'static> {
+        Contentline {
+            group: self.group.map(Identifier::into_owned),
+            name: self.name.into_owned(),
+            // TODO do this in-place
+            params: self.params.into_iter().map(Param::into_owned).collect(),
+            value: self.value.into_owned(),
+        }
+    }
 }
 
-impl Display for Contentline {
+// TODO implement FromStr for Contentline
+
+impl<'a> Display for Contentline<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         self.write(|s| f.write_str(s))
     }
@@ -322,20 +386,21 @@ impl Display for ParseContentlineError {
     }
 }
 
-/// Wraps a non-empty [`String`] that may only contain alphabetic chars, digits and dashes (`-`).
+/// Wraps a non-empty string that may contain only alphabetic chars, digits and dashes (`-`).
 #[derive(Clone, Debug, Eq, Ord, PartialOrd)]
-pub struct Identifier {
-    value: String,
+pub struct Identifier<'a> {
+    value: Cow<'a, str>,
 }
 
-impl Identifier {
+impl<'a> Identifier<'a> {
     /// Creates a new [`Identifier`].
     ///
     /// # Errors
     ///
     /// Fails if the argument is empty or if it contains any characters that are neither
     /// alphabetic, digits or dash (`-`).
-    pub fn new(identifier: String) -> Result<Self, InvalidIdentifier> {
+    pub fn new<I: Into<Cow<'a, str>>>(identifier: I) -> Result<Self, InvalidIdentifier> {
+        let identifier = identifier.into();
         if !identifier.is_empty() && identifier.chars().all(is_identifier_char) {
             Ok(Self { value: identifier })
         } else {
@@ -350,31 +415,24 @@ impl Identifier {
 
     /// Returns the [`String`] value of this [`Identifier`].
     pub fn into_value(self) -> String {
-        self.value
+        self.value.into_owned()
+    }
+
+    /// Allocates this [`Identifier`].
+    pub fn into_owned(self) -> Identifier<'static> {
+        Identifier::<'static> {
+            value: Cow::Owned(self.value.into_owned()),
+        }
     }
 }
 
-impl Display for Identifier {
+impl<'a> Display for Identifier<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{identifier}", identifier = self.value)
     }
 }
 
-impl TryFrom<String> for Identifier {
-    type Error = InvalidIdentifier;
-    fn try_from(identifier: String) -> Result<Self, Self::Error> {
-        Self::new(identifier)
-    }
-}
-
-impl TryFrom<&str> for Identifier {
-    type Error = InvalidIdentifier;
-    fn try_from(identifier: &str) -> Result<Self, Self::Error> {
-        Self::new(identifier.to_owned())
-    }
-}
-
-impl Hash for Identifier {
+impl<'a> Hash for Identifier<'a> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         // implementation is mostly the same as in std::str
         for c in self.value.as_bytes() {
@@ -384,25 +442,25 @@ impl Hash for Identifier {
     }
 }
 
-impl PartialEq for Identifier {
+impl<'a> PartialEq for Identifier<'a> {
     fn eq(&self, other: &Self) -> bool {
-        *self == other.value
+        *self == other.value.as_ref()
     }
 }
 
-impl PartialEq<String> for Identifier {
+impl<'a> PartialEq<String> for Identifier<'a> {
     fn eq(&self, other: &String) -> bool {
         *self == other.as_str()
     }
 }
 
-impl PartialEq<&str> for Identifier {
+impl<'a> PartialEq<&str> for Identifier<'a> {
     fn eq(&self, other: &&str) -> bool {
         *self == **other
     }
 }
 
-impl PartialEq<str> for Identifier {
+impl<'a> PartialEq<str> for Identifier<'a> {
     fn eq(&self, other: &str) -> bool {
         self.value.eq_ignore_ascii_case(other)
     }
@@ -426,22 +484,35 @@ impl Display for InvalidIdentifier {
 
 /// A single parameter of a [`Contentline`].
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct Param {
-    name: Identifier,
-    values: Vec<ParamValue>,
+pub struct Param<'a> {
+    name: Identifier<'a>,
+    values: Vec<ParamValue<'a>>,
 }
 
-impl Param {
+impl<'a> Param<'a> {
     /// Creates a new [`Param`].
     ///
     /// # Errors
     ///
     /// Fails if the values [`Vec`] is empty.
-    pub fn new(name: Identifier, values: Vec<ParamValue>) -> Result<Self, InvalidParam> {
+    pub fn new(name: Identifier<'a>, values: Vec<ParamValue<'a>>) -> Result<Self, InvalidParam> {
         if values.is_empty() {
             Err(InvalidParam)
         } else {
             Ok(Self { name, values })
+        }
+    }
+
+    /// Allocates the fields of this [`Param`].
+    fn into_owned(self) -> Param<'static> {
+        Param {
+            name: self.name.into_owned(),
+            // TODO do this in-place
+            values: self
+                .values
+                .into_iter()
+                .map(ParamValue::into_owned)
+                .collect(),
         }
     }
 }
@@ -463,18 +534,19 @@ impl Display for InvalidParam {
 /// This is a wrapper around a [`String`] that contains no control characters except horizontal
 /// tabs (`'\t'`) and linefeeds (`'\n'`).
 #[derive(Clone, Debug, Eq, Ord, PartialOrd)]
-pub struct ParamValue {
-    value: String,
+pub struct ParamValue<'a> {
+    value: Cow<'a, str>,
 }
 
-impl ParamValue {
+impl<'a> ParamValue<'a> {
     /// Creates a new [`ParamValue`].
     ///
     /// # Errors
     ///
     /// Fails if the argument contains control characters other than horizontal tabs (`'\t'`) and
     /// linefeeds (`'\n'`).
-    pub fn new(value: String) -> Result<Self, InvalidParamValue> {
+    pub fn new<I: Into<Cow<'a, str>>>(value: I) -> Result<Self, InvalidParamValue> {
+        let value = value.into();
         if value.contains(|c| is_control(c) && c != '\n') {
             Err(InvalidParamValue)
         } else {
@@ -489,55 +561,48 @@ impl ParamValue {
 
     /// Returns the [`String`] value of this [`ParamValue`].
     pub fn into_value(self) -> String {
-        self.value
+        self.value.into_owned()
+    }
+
+    /// Allocates this [`ParamValue`].
+    pub fn into_owned(self) -> ParamValue<'static> {
+        ParamValue {
+            value: Cow::Owned(self.value.into_owned()),
+        }
     }
 }
 
-impl Display for ParamValue {
+impl<'a> Display for ParamValue<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", &self.value)
     }
 }
 
-impl TryFrom<String> for ParamValue {
-    type Error = InvalidParamValue;
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Self::new(value)
-    }
-}
-
-impl TryFrom<&str> for ParamValue {
-    type Error = InvalidParamValue;
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Self::new(value.to_owned())
-    }
-}
-
-impl Hash for ParamValue {
+impl<'a> Hash for ParamValue<'a> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.value.hash(state)
     }
 }
 
-impl PartialEq for ParamValue {
+impl<'a> PartialEq for ParamValue<'a> {
     fn eq(&self, other: &Self) -> bool {
-        *self == other.value
+        *self == other.value.as_ref()
     }
 }
 
-impl PartialEq<String> for ParamValue {
+impl<'a> PartialEq<String> for ParamValue<'a> {
     fn eq(&self, other: &String) -> bool {
         *self == other.as_str()
     }
 }
 
-impl PartialEq<&str> for ParamValue {
+impl<'a> PartialEq<&str> for ParamValue<'a> {
     fn eq(&self, other: &&str) -> bool {
         *self == **other
     }
 }
 
-impl PartialEq<str> for ParamValue {
+impl<'a> PartialEq<str> for ParamValue<'a> {
     fn eq(&self, other: &str) -> bool {
         self.value == other
     }
@@ -561,15 +626,16 @@ impl Display for InvalidParamValue {
 /// This is a wrapper around a [`String`] that contains no control characters except horizontal
 /// tabs (`'\t'`).
 #[derive(Clone, Debug, Eq, Ord, PartialOrd)]
-pub struct Value {
-    value: String,
+pub struct Value<'a> {
+    value: Cow<'a, str>,
 }
 
-impl Value {
+impl<'a> Value<'a> {
     /// Creates a new [`Value`].
     ///
     /// Fails if the argument contains control characters other than horizontal tabs (`'\t'`).
-    pub fn new(value: String) -> Result<Self, InvalidValue> {
+    pub fn new<I: Into<Cow<'a, str>>>(value: I) -> Result<Self, InvalidValue> {
+        let value = value.into();
         if value.contains(is_control) {
             Err(InvalidValue)
         } else {
@@ -584,55 +650,48 @@ impl Value {
 
     /// Returns the [`String`] value of this [`Value`].
     pub fn into_value(self) -> String {
-        self.value
+        self.value.into_owned()
+    }
+
+    /// Allocates this [`Value`].
+    pub fn into_owned(self) -> Value<'static> {
+        Value::<'static> {
+            value: Cow::Owned(self.value.into_owned()),
+        }
     }
 }
 
-impl Display for Value {
+impl<'a> Display for Value<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", &self.value)
     }
 }
 
-impl TryFrom<String> for Value {
-    type Error = InvalidValue;
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Self::new(value)
-    }
-}
-
-impl TryFrom<&str> for Value {
-    type Error = InvalidValue;
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Self::new(value.to_owned())
-    }
-}
-
-impl Hash for Value {
+impl<'a> Hash for Value<'a> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.value.hash(state)
     }
 }
 
-impl PartialEq for Value {
+impl<'a> PartialEq for Value<'a> {
     fn eq(&self, other: &Self) -> bool {
-        *self == other.value
+        *self == other.value.as_ref()
     }
 }
 
-impl PartialEq<String> for Value {
+impl<'a> PartialEq<String> for Value<'a> {
     fn eq(&self, other: &String) -> bool {
         *self == other.as_str()
     }
 }
 
-impl PartialEq<&str> for Value {
+impl<'a> PartialEq<&str> for Value<'a> {
     fn eq(&self, other: &&str) -> bool {
         *self == **other
     }
 }
 
-impl PartialEq<str> for Value {
+impl<'a> PartialEq<str> for Value<'a> {
     fn eq(&self, other: &str) -> bool {
         self.value == other
     }
@@ -658,9 +717,9 @@ impl Display for InvalidValue {
 /// # Errors
 ///
 /// Fails if the group or the name of the content line are incorrectly formatted.
-fn parse_group_and_name(
-    contentline: &mut &str,
-) -> Result<(Option<Identifier>, Identifier), IntermediateParsingError> {
+fn parse_group_and_name<'a>(
+    contentline: &mut &'a str,
+) -> Result<(Option<Identifier<'a>>, Identifier<'a>), IntermediateParsingError> {
     let identifier = parse_identifier(contentline)?;
 
     if contentline.starts_with('.') {
@@ -682,7 +741,7 @@ fn parse_group_and_name(
 /// # Errors
 ///
 /// Fails if any parameter is incorrectly formatted.
-fn parse_params(contentline: &mut &str) -> Result<Vec<Param>, IntermediateParsingError> {
+fn parse_params<'a>(contentline: &mut &'a str) -> Result<Vec<Param<'a>>, IntermediateParsingError> {
     let mut params = Vec::new();
 
     while contentline.starts_with(';') {
@@ -698,7 +757,7 @@ fn parse_params(contentline: &mut &str) -> Result<Vec<Param>, IntermediateParsin
 /// # Errors
 ///
 /// Fails if the parameter is incorrectly formatted.
-fn parse_param(contentline: &mut &str) -> Result<Param, IntermediateParsingError> {
+fn parse_param<'a>(contentline: &mut &'a str) -> Result<Param<'a>, IntermediateParsingError> {
     let param_name = parse_identifier(contentline)?;
 
     if !contentline.starts_with('=') {
@@ -719,7 +778,9 @@ fn parse_param(contentline: &mut &str) -> Result<Param, IntermediateParsingError
 /// # Errors
 ///
 /// Fails if the list is empty or if there is an error parsing a [`ParamValue`].
-fn parse_param_values(contentline: &mut &str) -> Result<Vec<ParamValue>, IntermediateParsingError> {
+fn parse_param_values<'a>(
+    contentline: &mut &'a str,
+) -> Result<Vec<ParamValue<'a>>, IntermediateParsingError> {
     let mut param_values = vec![parse_param_value(contentline)?];
 
     while contentline.starts_with(',') {
@@ -735,7 +796,9 @@ fn parse_param_values(contentline: &mut &str) -> Result<Vec<ParamValue>, Interme
 /// # Errors
 ///
 /// Fails if the first character is a double quote (`"`) but there is not closing double quote.
-fn parse_param_value(contentline: &mut &str) -> Result<ParamValue, IntermediateParsingError> {
+fn parse_param_value<'a>(
+    contentline: &mut &'a str,
+) -> Result<ParamValue<'a>, IntermediateParsingError> {
     let param_value = if contentline.starts_with('"') {
         parse_quoted_string(contentline)?
     } else {
@@ -757,7 +820,9 @@ fn parse_param_value(contentline: &mut &str) -> Result<ParamValue, IntermediateP
 /// ```
 ///
 /// [rfc5545]: https://www.rfc-editor.org/rfc/rfc5545
-fn parse_quoted_string(contentline: &mut &str) -> Result<String, IntermediateParsingError> {
+fn parse_quoted_string<'a>(
+    contentline: &mut &'a str,
+) -> Result<Cow<'a, str>, IntermediateParsingError> {
     debug_assert!(contentline.starts_with('"'));
 
     *contentline = &contentline[1..];
@@ -783,7 +848,7 @@ fn parse_quoted_string(contentline: &mut &str) -> Result<String, IntermediatePar
 /// ```
 ///
 /// [rfc5545]: https://www.rfc-editor.org/rfc/rfc5545
-fn parse_paramtext(contentline: &mut &str) -> String {
+fn parse_paramtext<'a>(contentline: &mut &'a str) -> Cow<'a, str> {
     let paramtext_length = contentline
         .find(|c| !is_safe_char(c))
         .unwrap_or(contentline.len());
@@ -799,36 +864,44 @@ fn parse_paramtext(contentline: &mut &str) -> String {
 /// escape sequences defined in [RFC 6868][rfc6868] are parsed correctly.
 ///
 /// [rfc6868]: https://www.rfc-editor.org/rfc/rfc6868
-fn parse_param_value_rfc6868(mut param_value: &str) -> String {
+fn parse_param_value_rfc6868(param_value: &str) -> Cow<str> {
     debug_assert!(param_value.chars().all(is_qsafe_char));
 
-    let mut result = String::with_capacity(param_value.len());
+    match param_value.find('^') {
+        Some(next_index) => {
+            let mut result = String::with_capacity(param_value.len());
+            let mut param_value = param_value;
+            let mut next_index = Some(next_index);
 
-    while let Some(index) = param_value.find('^') {
-        result.push_str(&param_value[..index]);
-        match param_value.get(index + 1..index + 2) {
-            Some(escaped_char) => {
-                match escaped_char {
-                    "n" => result.push('\n'),
-                    "'" => result.push('\"'),
-                    "^" => result.push('^'),
-                    other => {
+            while let Some(index) = next_index {
+                result.push_str(&param_value[..index]);
+                match param_value.get(index + 1..index + 2) {
+                    Some(escaped_char) => {
+                        match escaped_char {
+                            "n" => result.push('\n'),
+                            "'" => result.push('\"'),
+                            "^" => result.push('^'),
+                            other => {
+                                result.push('^');
+                                result.push_str(other);
+                            }
+                        }
+                        param_value = &param_value[index + 2..];
+                    }
+                    None => {
                         result.push('^');
-                        result.push_str(other);
+                        param_value = &param_value[index + 1..];
                     }
                 }
-                param_value = &param_value[index + 2..];
+                next_index = param_value.find('^');
             }
-            None => {
-                result.push('^');
-                param_value = &param_value[index + 1..];
-            }
+
+            result.push_str(param_value);
+
+            Cow::Owned(result)
         }
+        None => Cow::Borrowed(param_value),
     }
-
-    result.push_str(param_value);
-
-    result
 }
 
 /// Parses a [`Value`].
@@ -837,12 +910,12 @@ fn parse_param_value_rfc6868(mut param_value: &str) -> String {
 ///
 /// Fails if the argument contains control characters other than horizontal tabs (see also
 /// [`is_control()`]).
-fn parse_value(contentline: &mut &str) -> Result<Value, IntermediateParsingError> {
+fn parse_value<'a>(contentline: &mut &'a str) -> Result<Value<'a>, IntermediateParsingError> {
     if contentline.contains(is_control) {
         Err(IntermediateParsingError)
     } else {
         let value = Value {
-            value: contentline.to_owned(),
+            value: Cow::Borrowed(contentline),
         };
         *contentline = "";
 
@@ -855,7 +928,9 @@ fn parse_value(contentline: &mut &str) -> Result<Value, IntermediateParsingError
 /// # Errors
 ///
 /// Fails if the first char of the argument is not [`is_identifier_char()`].
-fn parse_identifier(contentline: &mut &str) -> Result<Identifier, IntermediateParsingError> {
+fn parse_identifier<'a>(
+    contentline: &mut &'a str,
+) -> Result<Identifier<'a>, IntermediateParsingError> {
     let identifier_length = contentline
         .find(|c| !is_identifier_char(c))
         .unwrap_or(contentline.len());
@@ -865,7 +940,7 @@ fn parse_identifier(contentline: &mut &str) -> Result<Identifier, IntermediatePa
         Err(IntermediateParsingError)
     } else {
         let identifier = Identifier {
-            value: contentline[..identifier_length].to_owned(),
+            value: Cow::Borrowed(&contentline[..identifier_length]),
         };
         *contentline = &contentline[identifier_length..];
 
@@ -1046,114 +1121,106 @@ fn is_identifier_char(c: char) -> bool {
 mod tests {
     mod parse {
         use {
-            crate::{Contentline, Identifier, Param, ParamValue, Value},
+            crate::{Contentline, Identifier, Param, ParamValue, Parser, Value},
             std::iter,
         };
 
         #[test]
         fn name_and_value() {
             let contentline = "NOTE:This is a note.";
-            let parsed = crate::parse(contentline.as_bytes())
-                .collect::<Result<Vec<_>, _>>()
-                .unwrap();
+            let mut parser = Parser::new(contentline.as_bytes());
 
-            assert_eq!(parsed.len(), 1);
             assert_eq!(
-                parsed[0],
+                parser.parse_next_line().unwrap().unwrap(),
                 Contentline {
                     group: None,
-                    name: Identifier::try_from("NOTE").unwrap(),
+                    name: Identifier::new("NOTE").unwrap(),
                     params: Vec::new(),
-                    value: Value::try_from("This is a note.").unwrap(),
+                    value: Value::new("This is a note.").unwrap(),
                 }
             );
+            assert!(parser.parse_next_line().is_none());
         }
 
         #[test]
         fn group_name_params_value() {
             let contentline =
                 "test-group.TEST-CASE;test-param=PARAM1;another-test-param=PARAM2:value";
-            let parsed = crate::parse(contentline.as_bytes())
-                .collect::<Result<Vec<_>, _>>()
-                .unwrap();
+            let mut parser = Parser::new(contentline.as_bytes());
 
-            assert_eq!(parsed.len(), 1);
             assert_eq!(
-                parsed[0],
+                parser.parse_next_line().unwrap().unwrap(),
                 Contentline {
-                    group: Some(Identifier::try_from("test-group").unwrap()),
-                    name: Identifier::try_from("TEST-CASE").unwrap(),
+                    group: Some(Identifier::new("test-group").unwrap()),
+                    name: Identifier::new("TEST-CASE").unwrap(),
                     params: vec![
                         Param::new(
-                            Identifier::try_from("test-param").unwrap(),
-                            vec![ParamValue::try_from("PARAM1").unwrap()]
+                            Identifier::new("test-param").unwrap(),
+                            vec![ParamValue::new("PARAM1").unwrap()]
                         )
                         .unwrap(),
                         Param::new(
-                            Identifier::try_from("another-test-param").unwrap(),
-                            vec![ParamValue::try_from("PARAM2").unwrap()]
+                            Identifier::new("another-test-param").unwrap(),
+                            vec![ParamValue::new("PARAM2").unwrap()]
                         )
                         .unwrap(),
                     ],
-                    value: Value::try_from("value").unwrap(),
+                    value: Value::new("value").unwrap(),
                 }
             );
+            assert!(parser.parse_next_line().is_none());
         }
 
         #[test]
         fn empty_value() {
             let empty_value = "EMPTY-VALUE:";
-            let parsed = crate::parse(empty_value.as_bytes())
-                .collect::<Result<Vec<_>, _>>()
-                .unwrap();
+            let mut parser = Parser::new(empty_value.as_bytes());
 
-            assert_eq!(parsed.len(), 1);
             assert_eq!(
-                parsed[0],
+                parser.parse_next_line().unwrap().unwrap(),
                 Contentline {
                     group: None,
-                    name: Identifier::try_from("EMPTY-VALUE").unwrap(),
+                    name: Identifier::new("EMPTY-VALUE").unwrap(),
                     params: Vec::new(),
-                    value: Value::try_from("").unwrap(),
+                    value: Value::new("").unwrap(),
                 }
             );
+            assert!(parser.parse_next_line().is_none());
         }
 
         #[test]
         fn empty_param() {
             let empty_param = "EMPTY-PARAM;paramtext=;quoted-string=\"\";multiple=,,,,\"\",\"\",,\"\",,,\"\":value";
-            let parsed = crate::parse(empty_param.as_bytes())
-                .collect::<Result<Vec<_>, _>>()
-                .unwrap();
+            let mut parser = Parser::new(empty_param.as_bytes());
 
-            assert_eq!(parsed.len(), 1);
             assert_eq!(
-                parsed[0],
+                parser.parse_next_line().unwrap().unwrap(),
                 Contentline {
                     group: None,
-                    name: Identifier::try_from("EMPTY-PARAM").unwrap(),
+                    name: Identifier::new("EMPTY-PARAM").unwrap(),
                     params: vec![
                         Param::new(
-                            Identifier::try_from("paramtext").unwrap(),
-                            vec![ParamValue::try_from("").unwrap()]
+                            Identifier::new("paramtext").unwrap(),
+                            vec![ParamValue::new("").unwrap()]
                         )
                         .unwrap(),
                         Param::new(
-                            Identifier::try_from("quoted-string").unwrap(),
-                            vec![ParamValue::try_from("").unwrap()]
+                            Identifier::new("quoted-string").unwrap(),
+                            vec![ParamValue::new("").unwrap()]
                         )
                         .unwrap(),
                         Param::new(
-                            Identifier::try_from("multiple").unwrap(),
-                            iter::repeat(ParamValue::try_from("").unwrap())
+                            Identifier::new("multiple").unwrap(),
+                            iter::repeat(ParamValue::new("").unwrap())
                                 .take(11)
                                 .collect()
                         )
                         .unwrap(),
                     ],
-                    value: Value::try_from("value").unwrap(),
+                    value: Value::new("value").unwrap(),
                 }
             );
+            assert!(parser.parse_next_line().is_none());
         }
 
         #[test]
@@ -1161,10 +1228,10 @@ mod tests {
             let contentline0 = "Group.lowerUPPER;PaRaM=parameter value:value";
             let contentline1 = "group.LOWERupper;PARAm=parameter value:value";
 
-            let parsed0 = crate::parse(contentline0.as_bytes())
+            let parsed0 = Parser::new(contentline0.as_bytes())
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap();
-            let parsed1 = crate::parse(contentline1.as_bytes())
+            let parsed1 = Parser::new(contentline1.as_bytes())
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap();
 
@@ -1175,57 +1242,55 @@ mod tests {
         #[test]
         fn rfc6868() {
             let contentline = "RFC6868-TEST;caret=^^;newline=^n;double-quote=^';all-in-quotes=\"^^^n^'\";weird=^^^^n;others=^g^5^k^?^%^&^a:value";
-            let parsed = crate::parse(contentline.as_bytes())
-                .collect::<Result<Vec<_>, _>>()
-                .unwrap();
+            let mut parser = Parser::new(contentline.as_bytes());
 
-            assert_eq!(parsed.len(), 1);
             assert_eq!(
-                parsed[0],
+                parser.parse_next_line().unwrap().unwrap(),
                 Contentline {
                     group: None,
-                    name: Identifier::try_from("RFC6868-TEST").unwrap(),
+                    name: Identifier::new("RFC6868-TEST").unwrap(),
                     params: vec![
                         Param::new(
-                            Identifier::try_from("caret").unwrap(),
-                            vec![ParamValue::try_from("^").unwrap()]
+                            Identifier::new("caret").unwrap(),
+                            vec![ParamValue::new("^").unwrap()]
                         )
                         .unwrap(),
                         Param::new(
-                            Identifier::try_from("newline").unwrap(),
-                            vec![ParamValue::try_from("\n").unwrap()]
+                            Identifier::new("newline").unwrap(),
+                            vec![ParamValue::new("\n").unwrap()]
                         )
                         .unwrap(),
                         Param::new(
-                            Identifier::try_from("double-quote").unwrap(),
-                            vec![ParamValue::try_from("\"").unwrap()]
+                            Identifier::new("double-quote").unwrap(),
+                            vec![ParamValue::new("\"").unwrap()]
                         )
                         .unwrap(),
                         Param::new(
-                            Identifier::try_from("all-in-quotes").unwrap(),
-                            vec![ParamValue::try_from("^\n\"").unwrap()]
+                            Identifier::new("all-in-quotes").unwrap(),
+                            vec![ParamValue::new("^\n\"").unwrap()]
                         )
                         .unwrap(),
                         Param::new(
-                            Identifier::try_from("weird").unwrap(),
-                            vec![ParamValue::try_from("^^n").unwrap()]
+                            Identifier::new("weird").unwrap(),
+                            vec![ParamValue::new("^^n").unwrap()]
                         )
                         .unwrap(),
                         Param::new(
-                            Identifier::try_from("others").unwrap(),
-                            vec![ParamValue::try_from("^g^5^k^?^%^&^a").unwrap()]
+                            Identifier::new("others").unwrap(),
+                            vec![ParamValue::new("^g^5^k^?^%^&^a").unwrap()]
                         )
                         .unwrap(),
                     ],
-                    value: Value::try_from("value").unwrap(),
+                    value: Value::new("value").unwrap(),
                 }
             );
+            assert!(parser.parse_next_line().is_none());
         }
     }
 
     mod write {
         use {
-            crate::{Contentline, Identifier, Param, ParamValue, Value},
+            crate::{Contentline, Identifier, Param, ParamValue, Value, Writer},
             std::{iter, str},
         };
 
@@ -1233,16 +1298,17 @@ mod tests {
         fn name_and_value() {
             let contentline = Contentline {
                 group: None,
-                name: Identifier::try_from("NAME").unwrap(),
+                name: Identifier::new("NAME").unwrap(),
                 params: Vec::new(),
-                value: Value::try_from("VALUE").unwrap(),
+                value: Value::new("VALUE").unwrap(),
             };
 
             let expected = "NAME:VALUE\r\n";
 
             let actual = {
                 let mut buffer = Vec::new();
-                crate::write(iter::once(&contentline), &mut buffer).unwrap();
+                let mut writer = Writer::new(&mut buffer);
+                writer.write(&contentline).unwrap();
                 str::from_utf8(&buffer).unwrap().to_owned()
             };
 
@@ -1252,21 +1318,21 @@ mod tests {
         #[test]
         fn group_name_params_value() {
             let contentline = Contentline {
-                group: Some(Identifier::try_from("TEST-GROUP").unwrap()),
-                name: Identifier::try_from("TEST-NAME").unwrap(),
+                group: Some(Identifier::new("TEST-GROUP").unwrap()),
+                name: Identifier::new("TEST-NAME").unwrap(),
                 params: vec![
                     Param::new(
-                        Identifier::try_from("PARAM-1").unwrap(),
-                        vec![ParamValue::try_from("param value 1").unwrap()],
+                        Identifier::new("PARAM-1").unwrap(),
+                        vec![ParamValue::new("param value 1").unwrap()],
                     )
                     .unwrap(),
                     Param::new(
-                        Identifier::try_from("PARAM-2").unwrap(),
-                        vec![ParamValue::try_from("param value of parameter: 2").unwrap()],
+                        Identifier::new("PARAM-2").unwrap(),
+                        vec![ParamValue::new("param value of parameter: 2").unwrap()],
                     )
                     .unwrap(),
                 ],
-                value: Value::try_from("test value \"with quotes\"").unwrap(),
+                value: Value::new("test value \"with quotes\"").unwrap(),
             };
 
             let expected = "\
@@ -1276,7 +1342,8 @@ TEST-GROUP.TEST-NAME;PARAM-1=param value 1;PARAM-2=\"param value of paramete\r
 
             let actual = {
                 let mut buffer = Vec::new();
-                crate::write(iter::once(&contentline), &mut buffer).unwrap();
+                let mut writer = Writer::new(&mut buffer);
+                writer.write(&contentline).unwrap();
                 str::from_utf8(&buffer).unwrap().to_owned()
             };
 
@@ -1286,21 +1353,22 @@ TEST-GROUP.TEST-NAME;PARAM-1=param value 1;PARAM-2=\"param value of paramete\r
         #[test]
         fn identfiers_converted_to_uppercase() {
             let contentline = Contentline {
-                group: Some(Identifier::try_from("lower-group").unwrap()),
-                name: Identifier::try_from("name").unwrap(),
+                group: Some(Identifier::new("lower-group").unwrap()),
+                name: Identifier::new("name").unwrap(),
                 params: vec![Param::new(
-                    Identifier::try_from("PaRaM").unwrap(),
-                    vec![ParamValue::try_from("param value").unwrap()],
+                    Identifier::new("PaRaM").unwrap(),
+                    vec![ParamValue::new("param value").unwrap()],
                 )
                 .unwrap()],
-                value: Value::try_from("value").unwrap(),
+                value: Value::new("value").unwrap(),
             };
 
             let expected = "LOWER-GROUP.NAME;PARAM=param value:value\r\n";
 
             let actual = {
                 let mut buffer = Vec::new();
-                crate::write(iter::once(&contentline), &mut buffer).unwrap();
+                let mut writer = Writer::new(&mut buffer);
+                writer.write(&contentline).unwrap();
                 str::from_utf8(&buffer).unwrap().to_owned()
             };
 
@@ -1311,16 +1379,17 @@ TEST-GROUP.TEST-NAME;PARAM-1=param value 1;PARAM-2=\"param value of paramete\r
         fn empty_value() {
             let contentline = Contentline {
                 group: None,
-                name: Identifier::try_from("NAME").unwrap(),
+                name: Identifier::new("NAME").unwrap(),
                 params: Vec::new(),
-                value: Value::try_from("").unwrap(),
+                value: Value::new("").unwrap(),
             };
 
             let expected = "NAME:\r\n";
 
             let actual = {
                 let mut buffer = Vec::new();
-                crate::write(iter::once(&contentline), &mut buffer).unwrap();
+                let mut writer = Writer::new(&mut buffer);
+                writer.write(&contentline).unwrap();
                 str::from_utf8(&buffer).unwrap().to_owned()
             };
 
@@ -1333,15 +1402,15 @@ TEST-GROUP.TEST-NAME;PARAM-1=param value 1;PARAM-2=\"param value of paramete\r
 
             let contentline = Contentline {
                 group: None,
-                name: Identifier::try_from("NAME").unwrap(),
+                name: Identifier::new("NAME").unwrap(),
                 params: vec![Param::new(
-                    Identifier::try_from("PARAM").unwrap(),
-                    iter::repeat(ParamValue::try_from("").unwrap())
+                    Identifier::new("PARAM").unwrap(),
+                    iter::repeat(ParamValue::new("").unwrap())
                         .take(num_params)
                         .collect(),
                 )
                 .unwrap()],
-                value: Value::try_from("value").unwrap(),
+                value: Value::new("value").unwrap(),
             };
 
             let expected = {
@@ -1353,7 +1422,8 @@ TEST-GROUP.TEST-NAME;PARAM-1=param value 1;PARAM-2=\"param value of paramete\r
 
             let actual = {
                 let mut buffer = Vec::new();
-                crate::write(iter::once(&contentline), &mut buffer).unwrap();
+                let mut writer = Writer::new(&mut buffer);
+                writer.write(&contentline).unwrap();
                 str::from_utf8(&buffer).unwrap().to_owned()
             };
 
@@ -1364,42 +1434,43 @@ TEST-GROUP.TEST-NAME;PARAM-1=param value 1;PARAM-2=\"param value of paramete\r
         fn rfc6868() {
             let contentline = Contentline {
                 group: None,
-                name: Identifier::try_from("RFC6868-TEST").unwrap(),
+                name: Identifier::new("RFC6868-TEST").unwrap(),
                 params: vec![
                     Param::new(
-                        Identifier::try_from("CARET").unwrap(),
-                        vec![ParamValue::try_from("^").unwrap()],
+                        Identifier::new("CARET").unwrap(),
+                        vec![ParamValue::new("^").unwrap()],
                     )
                     .unwrap(),
                     Param::new(
-                        Identifier::try_from("NEWLINE").unwrap(),
-                        vec![ParamValue::try_from("\n").unwrap()],
+                        Identifier::new("NEWLINE").unwrap(),
+                        vec![ParamValue::new("\n").unwrap()],
                     )
                     .unwrap(),
                     Param::new(
-                        Identifier::try_from("DOUBLE-QUOTE").unwrap(),
-                        vec![ParamValue::try_from("\"").unwrap()],
+                        Identifier::new("DOUBLE-QUOTE").unwrap(),
+                        vec![ParamValue::new("\"").unwrap()],
                     )
                     .unwrap(),
                     Param::new(
-                        Identifier::try_from("ALL-IN-QUOTES").unwrap(),
-                        vec![ParamValue::try_from("^;\n;\"").unwrap()],
+                        Identifier::new("ALL-IN-QUOTES").unwrap(),
+                        vec![ParamValue::new("^;\n;\"").unwrap()],
                     )
                     .unwrap(),
                     Param::new(
-                        Identifier::try_from("WEIRD").unwrap(),
-                        vec![ParamValue::try_from("^^n").unwrap()],
+                        Identifier::new("WEIRD").unwrap(),
+                        vec![ParamValue::new("^^n").unwrap()],
                     )
                     .unwrap(),
                 ],
-                value: Value::try_from("value").unwrap(),
+                value: Value::new("value").unwrap(),
             };
 
             let expected = "RFC6868-TEST;CARET=^^;NEWLINE=^n;DOUBLE-QUOTE=^';ALL-IN-QUOTES=\"^^;^n;^'\";W\r\n EIRD=^^^^n:value\r\n";
 
             let actual = {
                 let mut buffer = Vec::new();
-                crate::write(iter::once(&contentline), &mut buffer).unwrap();
+                let mut writer = Writer::new(&mut buffer);
+                writer.write(&contentline).unwrap();
                 str::from_utf8(&buffer).unwrap().to_owned()
             };
 

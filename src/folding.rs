@@ -185,6 +185,26 @@ impl<W: Write> FoldingWriter<W> {
         self.current_line_length = 0;
         self.writer.write_all(b"\r\n")
     }
+
+    /// Calls flush on the underlying [`Write`] instance.
+    pub fn flush(&mut self) -> io::Result<()> {
+        self.writer.flush()
+    }
+
+    /// Returns a reference to the inner [`Write`].
+    pub fn inner(&self) -> &W {
+        &self.writer
+    }
+
+    /// Returns a mutable reference to the inner [`Write`].
+    pub fn inner_mut(&mut self) -> &mut W {
+        &mut self.writer
+    }
+
+    /// Returns the inner [`Write`].
+    pub fn into_inner(self) -> W {
+        self.writer
+    }
 }
 
 // TODO replace all uses of this function with std::str::floor_char_boundary()

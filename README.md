@@ -20,23 +20,16 @@ convenience or all of the features a specialized iCalendar or vCard library coul
  * Conforms to [RFC 6868][rfc6868], which updates [RFC 5545][rfc5545] and [RFC 6350][rfc6350] with
    escape rules for encoding double quotes and line breaks in parameter values.
 
-## Usage
-
-The main functionality of this crate is provided by 2 functions:
- * [`parse()`], which takes an [`io::Read`][read] and parses it to an [`Iterator`][iterator] of
-   content lines.
- * [`write()`], which takes an [`Iterator`][iterator] of content lines and writes them to an
-   [`io::Write`][write].
-
-For more detailed information, have a look at the documentation of the respective functions.
-
 ### Example: Parsing Birthdays
 
 This example shows how to transform a vCard file into a [`HashMap`][hashmap] that maps names to
 birthdays.
 
 ```rust
-use std::collections::HashMap;
+use {
+    ical_vcard::Parser,
+    std::collections::HashMap,
+};
 
 let vcard_file = "\
 BEGIN:VCARD\r
@@ -54,7 +47,7 @@ FN:Jack Black\r
 END:VCARD\r
 ".as_bytes();
 
-let birthdays: HashMap<_, _> = ical_vcard::parse(vcard_file)
+let birthdays: HashMap<_, _> = Parser::new(vcard_file)
     .collect::<Result<Vec<_>, _>>()
     .expect("valid vcard file")
     .split(|contentline| contentline.name == "BEGIN" && contentline.value == "VCARD")
@@ -86,7 +79,7 @@ assert_eq!(birthdays["Mark Daniels"], "19830525");
 This example illustrates how to write a vCard file.
 
 ```rust
-use ical_vcard::{Contentline, Identifier, Param, ParamValue, Value};
+use ical_vcard::{Contentline, Identifier, Param, ParamValue, Value, Writer};
 
 let names = [
     "Aristotle",
@@ -98,28 +91,28 @@ let names = [
 let contentlines = names.into_iter().flat_map(|name| [
     Contentline {
         group: None,
-        name: Identifier::try_from("BEGIN").unwrap(),
+        name: Identifier::new("BEGIN").unwrap(),
         params: Vec::new(),
-        value: Value::try_from("VCARD").unwrap(),
+        value: Value::new("VCARD").unwrap(),
     },
     Contentline {
         group: None,
-        name: Identifier::try_from("FN").unwrap(),
+        name: Identifier::new("FN").unwrap(),
         params: Vec::new(),
-        value: Value::try_from(name).unwrap(),
+        value: Value::new(name).unwrap(),
     },
     Contentline {
         group: None,
-        name: Identifier::try_from("N").unwrap(),
+        name: Identifier::new("N").unwrap(),
         params: Vec::new(),
         value: Value::new(format!(";{name};;;")).unwrap(),
     },
     Contentline {
         group: None,
-        name: Identifier::try_from("EMAIL").unwrap(),
+        name: Identifier::new("EMAIL").unwrap(),
         params: vec![Param::new(
-            Identifier::try_from("TYPE").unwrap(),
-            vec![ParamValue::try_from("work").unwrap()]
+            Identifier::new("TYPE").unwrap(),
+            vec![ParamValue::new("work").unwrap()]
         ).unwrap()],
         value: Value::new(
             format!("{name}@ancient-philosophers.gr", name = name.to_lowercase())
@@ -127,15 +120,16 @@ let contentlines = names.into_iter().flat_map(|name| [
     },
     Contentline {
         group: None,
-        name: Identifier::try_from("END").unwrap(),
+        name: Identifier::new("END").unwrap(),
         params: Vec::new(),
-        value: Value::try_from("VCARD").unwrap(),
+        value: Value::new("VCARD").unwrap(),
     },
 ]);
 
 let vcard = {
     let mut buffer = Vec::new();
-    ical_vcard::write(contentlines, &mut buffer).expect("write to Vec should cause no errors");
+    let mut writer = Writer::new(&mut buffer);
+    writer.write_all(contentlines).expect("write to Vec should cause no errors");
     buffer
 };
 
