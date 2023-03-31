@@ -156,7 +156,7 @@ impl<W: Write> FoldingWriter<W> {
     /// Fails if the underlying [`Write`] returns an error.
     pub fn write(&mut self, mut string: &str) -> io::Result<()> {
         debug_assert!(!string.starts_with([' ', '\t']));
-        debug_assert!(!string.contains(crate::is_control));
+        debug_assert!(!string.bytes().any(crate::is_control));
 
         while string.len() + usize::from(self.current_line_length) > FOLDING_LINE_LENGTH {
             let fold_index = floor_char_boundary(

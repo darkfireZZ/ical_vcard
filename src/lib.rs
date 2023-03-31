@@ -401,7 +401,7 @@ impl<'a> Identifier<'a> {
     /// alphabetic, digits or dash (`-`).
     pub fn new<I: Into<Cow<'a, str>>>(identifier: I) -> Result<Self, InvalidIdentifier> {
         let identifier = identifier.into();
-        if !identifier.is_empty() && identifier.chars().all(is_identifier_char) {
+        if Self::is_valid_identifier(&identifier) {
             Ok(Self { value: identifier })
         } else {
             Err(InvalidIdentifier)
@@ -422,6 +422,42 @@ impl<'a> Identifier<'a> {
     pub fn into_owned(self) -> Identifier<'static> {
         Identifier::<'static> {
             value: Cow::Owned(self.value.into_owned()),
+        }
+    }
+
+    /// Returns true if `identifier` is a valid [`Identifier`] value.
+    const fn is_valid_identifier(identifier: &str) -> bool {
+        if identifier.is_empty() {
+            return false;
+        }
+
+        let identifier = identifier.as_bytes();
+
+        let mut index = 0;
+        while index < identifier.len() {
+            if !is_identifier_char(identifier[index]) {
+                return false;
+            }
+            index += 1;
+        }
+
+        true
+    }
+}
+
+impl Identifier<'static> {
+    /// Creates a new borrowed [`Identifier`] with a `'static` lifetime.
+    ///
+    /// # Panics
+    ///
+    /// If `identifier` is not a valid identifier.
+    pub const fn new_const(identifier: &'static str) -> Self {
+        if Self::is_valid_identifier(identifier) {
+            Identifier {
+                value: Cow::Borrowed(identifier),
+            }
+        } else {
+            panic!("{}", InvalidIdentifier::ERROR_MESSAGE)
         }
     }
 }
@@ -473,12 +509,14 @@ impl<'a> PartialEq<str> for Identifier<'a> {
 #[derive(Debug, Error)]
 pub struct InvalidIdentifier;
 
+impl InvalidIdentifier {
+    const ERROR_MESSAGE: &'static str =
+        "an identifier can only contain alphanumeric characters and dashes ('-')";
+}
+
 impl Display for InvalidIdentifier {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "an identifier can only contain alphanumeric characters and dashes ('-')"
-        )
+        write!(f, "{}", Self::ERROR_MESSAGE)
     }
 }
 
@@ -523,9 +561,13 @@ impl<'a> Param<'a> {
 #[derive(Debug, Error)]
 pub struct InvalidParam;
 
+impl InvalidParam {
+    const ERROR_MESSAGE: &'static str = "a parameter must have at least 1 value";
+}
+
 impl Display for InvalidParam {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "a parameter must have at least 1 value")
+        write!(f, "{}", Self::ERROR_MESSAGE)
     }
 }
 
@@ -547,10 +589,10 @@ impl<'a> ParamValue<'a> {
     /// linefeeds (`'\n'`).
     pub fn new<I: Into<Cow<'a, str>>>(value: I) -> Result<Self, InvalidParamValue> {
         let value = value.into();
-        if value.contains(|c| is_control(c) && c != '\n') {
-            Err(InvalidParamValue)
-        } else {
+        if Self::is_valid_param_value(&value) {
             Ok(Self { value })
+        } else {
+            Err(InvalidParamValue)
         }
     }
 
@@ -568,6 +610,38 @@ impl<'a> ParamValue<'a> {
     pub fn into_owned(self) -> ParamValue<'static> {
         ParamValue {
             value: Cow::Owned(self.value.into_owned()),
+        }
+    }
+
+    /// Returns true if `value` is a valid [`ParamValue`] value.
+    const fn is_valid_param_value(value: &str) -> bool {
+        let value = value.as_bytes();
+
+        let mut index = 0;
+        while index < value.len() {
+            if is_control(value[index]) && value[index] != b'\n' {
+                return false;
+            }
+            index += 1;
+        }
+
+        true
+    }
+}
+
+impl ParamValue<'static> {
+    /// Creates a new borrowed [`ParamValue`] with a `'static` lifetime.
+    ///
+    /// # Panics
+    ///
+    /// If `value` is not a valid identifier.
+    pub const fn new_const(value: &'static str) -> Self {
+        if Self::is_valid_param_value(value) {
+            Self {
+                value: Cow::Borrowed(value),
+            }
+        } else {
+            panic!("{}", InvalidParamValue::ERROR_MESSAGE)
         }
     }
 }
@@ -615,9 +689,13 @@ impl<'a> PartialEq<str> for ParamValue<'a> {
 #[derive(Debug, Error)]
 pub struct InvalidParamValue;
 
+impl InvalidParamValue {
+    const ERROR_MESSAGE: &'static str = "param value may not contain any control characters";
+}
+
 impl Display for InvalidParamValue {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "param value may not contain any control characters")
+        write!(f, "{}", Self::ERROR_MESSAGE)
     }
 }
 
@@ -636,10 +714,10 @@ impl<'a> Value<'a> {
     /// Fails if the argument contains control characters other than horizontal tabs (`'\t'`).
     pub fn new<I: Into<Cow<'a, str>>>(value: I) -> Result<Self, InvalidValue> {
         let value = value.into();
-        if value.contains(is_control) {
-            Err(InvalidValue)
-        } else {
+        if Self::is_valid_value(&value) {
             Ok(Self { value })
+        } else {
+            Err(InvalidValue)
         }
     }
 
@@ -657,6 +735,38 @@ impl<'a> Value<'a> {
     pub fn into_owned(self) -> Value<'static> {
         Value::<'static> {
             value: Cow::Owned(self.value.into_owned()),
+        }
+    }
+
+    /// Returns true if `value` is a valid [`Value`] value.
+    const fn is_valid_value(value: &str) -> bool {
+        let value = value.as_bytes();
+
+        let mut index = 0;
+        while index < value.len() {
+            if is_control(value[index]) {
+                return false;
+            }
+            index += 1;
+        }
+
+        true
+    }
+}
+
+impl Value<'static> {
+    /// Creates a new borrowed [`Value`] with a `'static` lifetime.
+    ///
+    /// # Panics
+    ///
+    /// If `value` is not a valid identifier.
+    pub const fn new_const(value: &'static str) -> Self {
+        if Self::is_valid_value(value) {
+            Self {
+                value: Cow::Borrowed(value),
+            }
+        } else {
+            panic!("{}", InvalidValue::ERROR_MESSAGE)
         }
     }
 }
@@ -704,9 +814,13 @@ impl<'a> PartialEq<str> for Value<'a> {
 #[derive(Debug, Error)]
 pub struct InvalidValue;
 
+impl InvalidValue {
+    const ERROR_MESSAGE: &'static str = "value may not contain any control characters";
+}
+
 impl Display for InvalidValue {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "value may not contain any control characters")
+        write!(f, "{}", Self::ERROR_MESSAGE)
     }
 }
 
@@ -828,7 +942,8 @@ fn parse_quoted_string<'a>(
     *contentline = &contentline[1..];
 
     let quoted_string_length = contentline
-        .find(|c| !is_qsafe_char(c))
+        .bytes()
+        .position(|c| !is_qsafe_char(c))
         .ok_or(IntermediateParsingError)?;
     if &contentline[quoted_string_length..quoted_string_length + 1] == "\"" {
         let quoted_string = parse_param_value_rfc6868(&contentline[..quoted_string_length]);
@@ -850,7 +965,8 @@ fn parse_quoted_string<'a>(
 /// [rfc5545]: https://www.rfc-editor.org/rfc/rfc5545
 fn parse_paramtext<'a>(contentline: &mut &'a str) -> Cow<'a, str> {
     let paramtext_length = contentline
-        .find(|c| !is_safe_char(c))
+        .bytes()
+        .position(|c| !is_safe_char(c))
         .unwrap_or(contentline.len());
 
     let paramtext = parse_param_value_rfc6868(&contentline[..paramtext_length]);
@@ -865,9 +981,9 @@ fn parse_paramtext<'a>(contentline: &mut &'a str) -> Cow<'a, str> {
 ///
 /// [rfc6868]: https://www.rfc-editor.org/rfc/rfc6868
 fn parse_param_value_rfc6868(param_value: &str) -> Cow<str> {
-    debug_assert!(param_value.chars().all(is_qsafe_char));
+    debug_assert!(param_value.bytes().all(is_qsafe_char));
 
-    match param_value.find('^') {
+    let param_value = match param_value.find('^') {
         Some(next_index) => {
             let mut result = String::with_capacity(param_value.len());
             let mut param_value = param_value;
@@ -901,25 +1017,28 @@ fn parse_param_value_rfc6868(param_value: &str) -> Cow<str> {
             Cow::Owned(result)
         }
         None => Cow::Borrowed(param_value),
-    }
+    };
+
+    debug_assert!(ParamValue::is_valid_param_value(&param_value));
+
+    param_value
 }
 
 /// Parses a [`Value`].
 ///
 /// # Errors
 ///
-/// Fails if the argument contains control characters other than horizontal tabs (see also
-/// [`is_control()`]).
+/// Fails if the argument contains control characters other than horizontal tabs.
 fn parse_value<'a>(contentline: &mut &'a str) -> Result<Value<'a>, IntermediateParsingError> {
-    if contentline.contains(is_control) {
-        Err(IntermediateParsingError)
-    } else {
+    if Value::is_valid_value(contentline) {
         let value = Value {
             value: Cow::Borrowed(contentline),
         };
         *contentline = "";
 
         Ok(value)
+    } else {
+        Err(IntermediateParsingError)
     }
 }
 
@@ -932,17 +1051,21 @@ fn parse_identifier<'a>(
     contentline: &mut &'a str,
 ) -> Result<Identifier<'a>, IntermediateParsingError> {
     let identifier_length = contentline
-        .find(|c| !is_identifier_char(c))
+        .bytes()
+        .position(|c| !is_identifier_char(c))
         .unwrap_or(contentline.len());
 
     // identifier cannot be an empty string
     if identifier_length == 0 {
         Err(IntermediateParsingError)
     } else {
-        let identifier = Identifier {
-            value: Cow::Borrowed(&contentline[..identifier_length]),
-        };
+        let identifier = &contentline[..identifier_length];
         *contentline = &contentline[identifier_length..];
+
+        debug_assert!(Identifier::is_valid_identifier(identifier));
+        let identifier = Identifier {
+            value: Cow::Borrowed(identifier),
+        };
 
         Ok(identifier)
     }
@@ -1065,7 +1188,7 @@ where
 
 //====================// helper functions for parsing //====================//
 
-/// Checks whether a [`char`] is a `SAFE_CHAR`.
+/// Checks whether a character is a `SAFE_CHAR`.
 ///
 /// ABNF from [RFC 5545][rfc5545]:
 ///
@@ -1076,11 +1199,11 @@ where
 /// ```
 ///
 /// [rfc5545]: https://www.rfc-editor.org/rfc/rfc5545
-fn is_safe_char(c: char) -> bool {
-    !is_control(c) && (c != '"') && (c != ';') && (c != ':') && (c != ',')
+const fn is_safe_char(c: u8) -> bool {
+    !is_control(c) && (c != b'"') && (c != b';') && (c != b':') && (c != b',')
 }
 
-/// Checks whether a [`char`] is a `QSAFE_CHAR`.
+/// Checks whether a character is a `QSAFE_CHAR`.
 ///
 /// ABNF from [RFC 5545][rfc5545]:
 ///
@@ -1090,11 +1213,11 @@ fn is_safe_char(c: char) -> bool {
 /// ```
 ///
 /// [rfc5545]: https://www.rfc-editor.org/rfc/rfc5545
-fn is_qsafe_char(c: char) -> bool {
-    !is_control(c) && (c != '"')
+const fn is_qsafe_char(c: u8) -> bool {
+    !is_control(c) && (c != b'"')
 }
 
-/// Checks whether a [`char`] is a `CONTROL`.
+/// Checks whether a character is a `CONTROL` character.
 ///
 /// Note that in [RFC 5545][rfc5545] and [RFC 6350][rfc6350] the definition of a control character
 /// excludes the horizontal tab (`'\t'`).
@@ -1108,17 +1231,46 @@ fn is_qsafe_char(c: char) -> bool {
 ///
 /// [rfc5545]: https://www.rfc-editor.org/rfc/rfc5545
 /// [rfc6350]: https://www.rfc-editor.org/rfc/rfc6350
-fn is_control(c: char) -> bool {
-    char::is_control(c) && (c != '\t')
+const fn is_control(c: u8) -> bool {
+    c.is_ascii_control() && (c != b'\t')
 }
 
-/// Checks whether a [`char`] is alphanumeric or a dash (`'-'`).
-fn is_identifier_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '-'
+/// Checks whether a character is alphanumeric or a dash (`'-'`).
+const fn is_identifier_char(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || (c == b'-')
 }
 
 #[cfg(test)]
 mod tests {
+    mod const_constructors {
+        use crate::{Identifier, ParamValue, Value};
+
+        #[test]
+        fn valid() {
+            Identifier::new_const("IDENTIFIER");
+            ParamValue::new_const("PARAM_VALUE");
+            Value::new_const("VALUE");
+        }
+
+        #[test]
+        #[should_panic]
+        fn invalid_identifier() {
+            Identifier::new_const("INVALID IDENTIFIER");
+        }
+
+        #[test]
+        #[should_panic]
+        fn invalid_param_value() {
+            ParamValue::new_const("INVALID PARAM VALUE\r");
+        }
+
+        #[test]
+        #[should_panic]
+        fn invalid_value() {
+            Value::new_const("INVALID VALUE\n");
+        }
+    }
+
     mod parse {
         use {
             crate::{Contentline, Identifier, Param, ParamValue, Parser, Value},
