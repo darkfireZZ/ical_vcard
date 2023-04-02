@@ -40,7 +40,7 @@ END:VCARD\r
 BEGIN:VCARD\r
 FN:Peter Smith\r
 BDAY:19770525\r
-EMAIL:peter.smith@sw.com\r
+EMAIL:peter.smith@example.com\r
 END:VCARD\r
 BEGIN:VCARD\r
 BDAY:19800521\r
