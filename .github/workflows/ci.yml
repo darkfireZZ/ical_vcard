@@ -26,10 +26,7 @@ jobs:
         with:
           toolchain: stable
           components: clippy
-      - uses: actions-rs/clippy-check@v1
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          args: --all-features
+      - run: cargo clippy
 
   rustdoc:
     name: cargo doc
@@ -50,3 +47,17 @@ jobs:
         with:
           toolchain: stable
       - run: cargo test
+
+  coverage:
+    name: code coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - run: cargo llvm-cov --lcov --output-path lcov.info
+      - uses: codecov/codecov-action@v3
+        with:
+          fail_ci_if_error: true
