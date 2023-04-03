@@ -24,6 +24,7 @@ convenience or all of the features a specialized iCalendar or vCard library coul
    which describe the content line format.
  * Conforms to [RFC 6868][rfc6868], which updates [RFC 5545][rfc5545] and [RFC 6350][rfc6350] with
    escape rules for encoding double quotes and line breaks in parameter values.
+ * Minimal dependencies
  * No unsafe code
 
 ### Example: Parsing Birthdays
