@@ -10,6 +10,9 @@ license = "MIT OR Apache-2.0"
 keywords = ["ical", "vcard", "parser"]
 categories = ["parser-implementations", "parsing"]
 
+[profile.dev]
+opt-level = 1
+
 [dependencies]
 # no dependencies :)
 
