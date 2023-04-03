@@ -8,12 +8,12 @@ use {
     crate::folding::{FoldingWriter, UnfoldingReader},
     std::{
         borrow::{Borrow, Cow},
+        error::Error,
         fmt::{self, Display},
         hash::{Hash, Hasher},
         io::{self, Read, Write},
         iter::Iterator,
     },
-    thiserror::Error,
 };
 
 mod folding;
@@ -119,14 +119,42 @@ impl<R: Read> Iterator for Parser<R> {
 }
 
 /// The error type returned if parsing fails.
-#[derive(Debug, Error)]
+#[derive(Debug)]
 pub enum ParseError {
     /// An IO error occurred while parsing.
-    #[error(transparent)]
-    IoError(#[from] io::Error),
+    IoError(io::Error),
     /// An invalid content line was encountered.
-    #[error(transparent)]
-    InvalidContentline(#[from] ParseContentlineError),
+    InvalidContentline(ParseContentlineError),
+}
+
+impl From<io::Error> for ParseError {
+    fn from(error: io::Error) -> Self {
+        Self::IoError(error)
+    }
+}
+
+impl From<ParseContentlineError> for ParseError {
+    fn from(error: ParseContentlineError) -> Self {
+        Self::InvalidContentline(error)
+    }
+}
+
+impl Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::IoError(error) => error.fmt(f),
+            Self::InvalidContentline(error) => error.fmt(f),
+        }
+    }
+}
+
+impl Error for ParseError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::IoError(error) => Some(error),
+            Self::InvalidContentline(error) => Some(error),
+        }
+    }
 }
 
 /// Writes an iCalendar or vCard file.
@@ -366,7 +394,7 @@ impl<'a> Display for Contentline<'a> {
 }
 
 /// Indicates a failure to parse a [`Contentline`].
-#[derive(Debug, Error)]
+#[derive(Debug)]
 pub struct ParseContentlineError {
     invalid_contentline: String,
 }
@@ -385,6 +413,8 @@ impl Display for ParseContentlineError {
         write!(f, "invalid contentline")
     }
 }
+
+impl Error for ParseContentlineError {}
 
 macro_rules! empty {
     () => {};
@@ -635,7 +665,7 @@ macro_rules! cow_wrapper {
         #[doc = concat!("Indicates an attempt to create a [`", stringify!($type_name), "`] from an invalid ", $doc_name, ".")]
         ///
         #[doc = concat!("A [`", stringify!($type_name), "`] is considered valid if ", $valid_if, ".")]
-        #[derive(Debug, Error)]
+        #[derive(Debug)]
         pub struct $error_name;
 
         impl Display for $error_name {
@@ -643,6 +673,8 @@ macro_rules! cow_wrapper {
                 write!(f, $error_message)
             }
         }
+
+        impl Error for $error_name {}
     };
 }
 
@@ -717,7 +749,7 @@ impl<'a> Param<'a> {
 /// Indicates a failed attempt to create a [`Param`].
 ///
 /// This happens when it is attempted to create a [`Param`] without any value.
-#[derive(Debug, Error)]
+#[derive(Debug)]
 pub struct InvalidParam;
 
 impl Display for InvalidParam {
@@ -725,6 +757,8 @@ impl Display for InvalidParam {
         write!(f, "a parameter must have at least 1 value")
     }
 }
+
+impl Error for InvalidParam {}
 
 cow_wrapper! {
     @metainfo {
