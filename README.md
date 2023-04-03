@@ -45,7 +45,7 @@ END:VCARD\r
 BEGIN:VCARD\r
 FN:Peter Smith\r
 BDAY:19770525\r
-EMAIL:peter.smith@sw.com\r
+EMAIL:peter.smith@example.com\r
 END:VCARD\r
 BEGIN:VCARD\r
 BDAY:19800521\r
@@ -62,14 +62,12 @@ let birthdays: HashMap<_, _> = Parser::new(vcard_file)
             .iter()
             .find(|contentline| contentline.name == "FN")?
             .value
-            .value()
-            .to_owned();
+            .to_string();
         let birthday = vcard
             .iter()
             .find(|contentline| contentline.name == "BDAY")?
             .value
-            .value()
-            .to_owned();
+            .to_string();
 
         Some((name, birthday))
     })
@@ -97,38 +95,38 @@ let names = [
 let contentlines = names.into_iter().flat_map(|name| [
     Contentline {
         group: None,
-        name: Identifier::new("BEGIN").unwrap(),
+        name: Identifier::new_borrowed("BEGIN").unwrap(),
         params: Vec::new(),
-        value: Value::new("VCARD").unwrap(),
+        value: Value::new_borrowed("VCARD").unwrap(),
     },
     Contentline {
         group: None,
-        name: Identifier::new("FN").unwrap(),
+        name: Identifier::new_borrowed("FN").unwrap(),
         params: Vec::new(),
-        value: Value::new(name).unwrap(),
+        value: Value::new_borrowed(name).unwrap(),
     },
     Contentline {
         group: None,
-        name: Identifier::new("N").unwrap(),
+        name: Identifier::new_borrowed("N").unwrap(),
         params: Vec::new(),
-        value: Value::new(format!(";{name};;;")).unwrap(),
+        value: Value::new_owned(format!(";{name};;;")).unwrap(),
     },
     Contentline {
         group: None,
-        name: Identifier::new("EMAIL").unwrap(),
+        name: Identifier::new_borrowed("EMAIL").unwrap(),
         params: vec![Param::new(
-            Identifier::new("TYPE").unwrap(),
-            vec![ParamValue::new("work").unwrap()]
+            Identifier::new_borrowed("TYPE").unwrap(),
+            vec![ParamValue::new_borrowed("work").unwrap()]
         ).unwrap()],
-        value: Value::new(
+        value: Value::new_owned(
             format!("{name}@ancient-philosophers.gr", name = name.to_lowercase())
         ).unwrap(),
     },
     Contentline {
         group: None,
-        name: Identifier::new("END").unwrap(),
+        name: Identifier::new_borrowed("END").unwrap(),
         params: Vec::new(),
-        value: Value::new("VCARD").unwrap(),
+        value: Value::new_borrowed("VCARD").unwrap(),
     },
 ]);
 
