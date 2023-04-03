@@ -154,30 +154,30 @@ pub enum ParseError {
 /// let contentlines = [
 ///     Contentline {
 ///         group: None,
-///         name: Identifier::new("BEGIN")?,
+///         name: Identifier::new_borrowed("BEGIN")?,
 ///         params: Vec::new(),
-///         value: Value::new("VCARD")?,
+///         value: Value::new_borrowed("VCARD")?,
 ///     },
 ///     Contentline {
 ///         group: None,
-///         name: Identifier::new("FN")?,
+///         name: Identifier::new_borrowed("FN")?,
 ///         params: Vec::new(),
-///         value: Value::new("Mr. John Example")?,
+///         value: Value::new_borrowed("Mr. John Example")?,
 ///     },
 ///     Contentline {
 ///         group: None,
-///         name: Identifier::new("BDAY")?,
+///         name: Identifier::new_borrowed("BDAY")?,
 ///         params: vec![Param::new(
-///             Identifier::new("VALUE")?,
-///             vec![ParamValue::new("date-and-or-time")?],
+///             Identifier::new_borrowed("VALUE")?,
+///             vec![ParamValue::new_borrowed("date-and-or-time")?],
 ///         )?],
-///         value: Value::new("20230326")?,
+///         value: Value::new_borrowed("20230326")?,
 ///     },
 ///     Contentline {
 ///         group: None,
-///         name: Identifier::new("END")?,
+///         name: Identifier::new_borrowed("END")?,
 ///         params: Vec::new(),
-///         value: Value::new("VCARD")?,
+///         value: Value::new_borrowed("VCARD")?,
 ///     },
 /// ];
 ///
@@ -348,11 +348,11 @@ impl<'a> Contentline<'a> {
     /// Allocates the fields of this [`Contentline`].
     pub fn into_owned(self) -> Contentline<'static> {
         Contentline {
-            group: self.group.map(Identifier::into_owned),
-            name: self.name.into_owned(),
+            group: self.group.map(Identifier::into_static),
+            name: self.name.into_static(),
             // TODO do this in-place
             params: self.params.into_iter().map(Param::into_owned).collect(),
-            value: self.value.into_owned(),
+            value: self.value.into_static(),
         }
     }
 }
@@ -386,137 +386,296 @@ impl Display for ParseContentlineError {
     }
 }
 
-/// Wraps a non-empty string that may contain only alphabetic chars, digits and dashes (`-`).
-#[derive(Clone, Debug, Eq, Ord, PartialOrd)]
-pub struct Identifier<'a> {
-    value: Cow<'a, str>,
+macro_rules! empty {
+    () => {};
 }
 
-impl<'a> Identifier<'a> {
-    /// Creates a new [`Identifier`].
-    ///
-    /// # Errors
-    ///
-    /// Fails if the argument is empty or if it contains any characters that are neither
-    /// alphabetic, digits or dash (`-`).
-    pub fn new<I: Into<Cow<'a, str>>>(identifier: I) -> Result<Self, InvalidIdentifier> {
-        let identifier = identifier.into();
-        if Self::is_valid_identifier(&identifier) {
-            Ok(Self { value: identifier })
-        } else {
-            Err(InvalidIdentifier)
+macro_rules! cow_wrapper {
+    (
+        @metainfo {
+            case_sensitive: true,
+            $($metainfo:tt)*
+        };
+
+        $($remainder:tt)*
+    ) => {
+        cow_wrapper! {
+            @metainfo {
+                is_case_sensitive: empty!{},
+                $($metainfo)*
+            };
+
+            $($remainder)*
         }
-    }
+    };
+    (
+        @metainfo {
+            case_sensitive: false,
+            $($metainfo:tt)*
+        };
 
-    /// Returns the [`&str`] value of this [`Identifier`].
-    pub fn value(&self) -> &str {
-        &self.value
-    }
+        $($remainder:tt)*
+    ) => {
+        cow_wrapper! {
+            @metainfo {
+                is_not_case_sensitive: empty!{},
+                $($metainfo)*
+            };
 
-    /// Returns the [`String`] value of this [`Identifier`].
-    pub fn into_value(self) -> String {
-        self.value.into_owned()
-    }
-
-    /// Allocates this [`Identifier`].
-    pub fn into_owned(self) -> Identifier<'static> {
-        Identifier::<'static> {
-            value: Cow::Owned(self.value.into_owned()),
+            $($remainder)*
         }
-    }
+    };
+    (
+        @metainfo {
+            $(is_case_sensitive: $is_case_sensitive:item,)?
+            $(is_not_case_sensitive: $is_not_case_sensitive:item,)?
+            param_name: $param_name:ident,
+            doc_name: $doc_name:literal,
+            error_name: $error_name:ident,
+            error_message: $error_message:literal,
+            valid_if: $valid_if:literal,
+        };
 
-    /// Returns true if `identifier` is a valid [`Identifier`] value.
-    const fn is_valid_identifier(identifier: &str) -> bool {
-        if identifier.is_empty() {
-            return false;
+        pub struct $type_name:ident { ... }
+
+        impl $_type_name:ident {
+            pub const fn is_valid($_param_name:ident: &str) -> bool {
+                $( $is_valid_impl:tt )+
+            }
+        }
+    ) => {
+        $( /* if */ $is_not_case_sensitive
+            #[derive(Hash)]
+        )*
+        #[doc = concat!("A [`Cow<str>`] wrapper that is guaranteed to be a valid ", $doc_name, ".")]
+        ///
+        #[doc = concat!("A ", $doc_name, " is considered valid if it ", $valid_if, ".")]
+        #[derive(Clone, Debug, Eq)]
+        pub struct $type_name<'a> {
+            value: Cow<'a, str>,
         }
 
-        let identifier = identifier.as_bytes();
+        impl $type_name<'static> {
+            #[doc = concat!("Creates a new [`", stringify!($type_name), "`] from an owned [`String`].")]
+            ///
+            #[doc = concat!("This is a shorthand for `", stringify!($type_name), "::new(Cow::Owned(", stringify!($param_name), ")`.")]
+            ///
+            /// # Errors
+            ///
+            #[doc = concat!("Fails if `", stringify!($param_name), "` is not a valid ", $doc_name, ".")]
+            pub fn new_owned($param_name: String) -> Result<Self, $error_name> {
+                Self::new(Cow::Owned($param_name))
+            }
+        }
 
-        let mut index = 0;
-        while index < identifier.len() {
-            if !is_identifier_char(identifier[index]) {
+        impl<'a> $type_name<'a> {
+            #[doc = concat!("Creates a new [`", stringify!($type_name), "`] from a string slice.")]
+            ///
+            #[doc = concat!("This is a shorthand for `", stringify!($type_name), "::new(Cow::Borrowed(", stringify!($param_name), ")`.")]
+            ///
+            /// # Errors
+            ///
+            #[doc = concat!("Fails if `", stringify!($param_name), "` is not a valid ", $doc_name, ".")]
+            pub const fn new_borrowed($param_name: &'a str) -> Result<Self, $error_name> {
+                if Self::is_valid($param_name) {
+                    Ok(Self {
+                        value: Cow::Borrowed($param_name),
+                    })
+                } else {
+                    Err($error_name)
+                }
+            }
+
+            #[doc = concat!("Creates a new [`", stringify!($type_name), "`].")]
+            ///
+            /// # Errors
+            ///
+            #[doc = concat!("Fails if `", stringify!($param_name), "` is not a valid ", $doc_name, ".")]
+            pub fn new($param_name: Cow<'a, str>) -> Result<Self, $error_name> {
+                if Self::is_valid(&$param_name) {
+                    Ok(Self { value: $param_name })
+                } else {
+                    Err($error_name)
+                }
+            }
+
+            #[doc = concat!("Creates a new [`", stringify!($type_name), "`]. Does not check if `", stringify!($param_name), "` is valid.")]
+            ///
+            #[doc = concat!("It is up to the caller to ensure that `", stringify!($param_name), "` is a valid ", $doc_name, ".")]
+            #[doc = concat!("See also [`", stringify!($type_name), "::is_valid()`].")]
+            pub const fn new_unchecked($param_name: Cow<'a, str>) -> Self {
+                Self { value: $param_name }
+            }
+
+            $( /* if */ $is_not_case_sensitive
+                #[doc = concat!("Extracts a string slice containing the ", $doc_name, ".")]
+                pub fn as_str(&self) -> &str {
+                    &self.value
+                }
+            )?
+
+            #[doc = concat!("Converts this ", $doc_name, " to an [`", stringify!($type_name), "`] with a `'static` lifetime.")]
+            ///
+            #[doc = concat!("Allocates this [`", stringify!($type_name), "`] if necessary.")]
+            pub fn into_static(self) -> $type_name<'static> {
+                $type_name::<'static> {
+                    value: Cow::Owned(self.value.into_owned()),
+                }
+            }
+
+            #[doc = concat!("Returns true if `", stringify!($param_name), "` is a valid ", $doc_name, ".")]
+            ///
+            #[doc = concat!("A ", $doc_name, " is considered valid if it ", $valid_if, ".")]
+            pub const fn is_valid($param_name: &str) -> bool {
+                $( $is_valid_impl )+
+            }
+        }
+
+        impl<'a> PartialEq for $type_name<'a> {
+            fn eq(&self, other: &Self) -> bool {
+                *self == other.value.as_ref()
+            }
+        }
+
+        impl<'a> PartialEq<String> for $type_name<'a> {
+            fn eq(&self, other: &String) -> bool {
+                self == other.as_str()
+            }
+        }
+
+        impl<'a> PartialEq<&str> for $type_name<'a> {
+            fn eq(&self, other: &&str) -> bool {
+                self == *other
+            }
+        }
+
+        impl<'a> PartialEq<str> for $type_name<'a> {
+            fn eq(&self, other: &str) -> bool {
+                $( /* if */ $is_case_sensitive
+                    self.value.eq_ignore_ascii_case(other)
+                )?
+                $( /* if */ $is_not_case_sensitive
+                    self.value == other
+                )?
+            }
+        }
+
+        $( /* if */ $is_case_sensitive
+            impl<'a> Hash for $type_name<'a> {
+                fn hash<H: Hasher>(&self, state: &mut H) {
+                    // implementation is mostly the same as in std::str
+                    for c in self.value.as_bytes() {
+                        c.to_ascii_uppercase().hash(state);
+                    }
+                    state.write_u8(0xff);
+                }
+            }
+        )?
+
+        impl<'a> TryFrom<Cow<'a, str>> for $type_name<'a> {
+            type Error = $error_name;
+            fn try_from($param_name: Cow<'a, str>) -> Result<Self, Self::Error> {
+                Self::new($param_name)
+            }
+        }
+
+        impl<'a> TryFrom<&'a str> for $type_name<'a> {
+            type Error = $error_name;
+            fn try_from($param_name: &'a str) -> Result<Self, Self::Error> {
+                Self::new_borrowed($param_name)
+            }
+        }
+
+        impl TryFrom<String> for $type_name<'static> {
+            type Error = $error_name;
+            fn try_from($param_name: String) -> Result<Self, Self::Error> {
+                Self::new_owned($param_name)
+            }
+        }
+
+        $( /* if */ $is_not_case_sensitive
+            impl<'a> AsRef<str> for $type_name<'a> {
+                fn as_ref(&self) -> &str {
+                    self.as_str()
+                }
+            }
+
+            impl<'a> From<$type_name<'a>> for Cow<'a, str> {
+                fn from($param_name: $type_name<'a>) -> Self {
+                    $param_name.value
+                }
+            }
+        )?
+
+        impl From<$type_name<'_>> for String {
+            fn from($param_name: $type_name) -> Self {
+                $( /* if */ $is_case_sensitive
+                    $param_name.value.to_ascii_uppercase()
+                )?
+                $( /* if */ $is_not_case_sensitive
+                    $param_name.value.into_owned()
+                )?
+            }
+        }
+
+        impl<'a> Display for $type_name<'a> {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                let value = {
+                    $( /* if */ $is_case_sensitive
+                       &self.value.to_ascii_uppercase()
+                    )*
+                    $( /* if */ $is_not_case_sensitive
+                       &self.value
+                    )?
+                };
+                write!(f, "{}", value)
+            }
+        }
+
+        #[doc = concat!("Indicates an attempt to create a [`", stringify!($type_name), "`] from an invalid ", $doc_name, ".")]
+        ///
+        #[doc = concat!("A [`", stringify!($type_name), "`] is considered valid if ", $valid_if, ".")]
+        #[derive(Debug, Error)]
+        pub struct $error_name;
+
+        impl Display for $error_name {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                write!(f, $error_message)
+            }
+        }
+    };
+}
+
+cow_wrapper! {
+    @metainfo {
+        case_sensitive: true,
+        param_name: identifier,
+        doc_name: "identifier",
+        error_name: InvalidIdentifier,
+        error_message: "an identifier can only contain alphanumeric characters and dashes ('-')",
+        valid_if: "is not empty and all characters are alphanumeric ascii characters or dashes (`-`)",
+    };
+
+    pub struct Identifier { ... }
+
+    impl Identifier {
+        pub const fn is_valid(identifier: &str) -> bool {
+            if identifier.is_empty() {
                 return false;
             }
-            index += 1;
-        }
 
-        true
-    }
-}
+            let identifier = identifier.as_bytes();
 
-impl Identifier<'static> {
-    /// Creates a new borrowed [`Identifier`] with a `'static` lifetime.
-    ///
-    /// # Panics
-    ///
-    /// If `identifier` is not a valid identifier.
-    pub const fn new_const(identifier: &'static str) -> Self {
-        if Self::is_valid_identifier(identifier) {
-            Identifier {
-                value: Cow::Borrowed(identifier),
+            let mut index = 0;
+            while index < identifier.len() {
+                if !is_identifier_char(identifier[index]) {
+                    return false;
+                }
+                index += 1;
             }
-        } else {
-            panic!("{}", InvalidIdentifier::ERROR_MESSAGE)
+
+            true
         }
-    }
-}
-
-impl<'a> Display for Identifier<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{identifier}", identifier = self.value)
-    }
-}
-
-impl<'a> Hash for Identifier<'a> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        // implementation is mostly the same as in std::str
-        for c in self.value.as_bytes() {
-            c.to_ascii_uppercase().hash(state);
-        }
-        state.write_u8(0xff);
-    }
-}
-
-impl<'a> PartialEq for Identifier<'a> {
-    fn eq(&self, other: &Self) -> bool {
-        *self == other.value.as_ref()
-    }
-}
-
-impl<'a> PartialEq<String> for Identifier<'a> {
-    fn eq(&self, other: &String) -> bool {
-        *self == other.as_str()
-    }
-}
-
-impl<'a> PartialEq<&str> for Identifier<'a> {
-    fn eq(&self, other: &&str) -> bool {
-        *self == **other
-    }
-}
-
-impl<'a> PartialEq<str> for Identifier<'a> {
-    fn eq(&self, other: &str) -> bool {
-        self.value.eq_ignore_ascii_case(other)
-    }
-}
-
-/// Indicates a failed attempt to create an [`Identifier`].
-///
-/// An [`Identifier`] can only contain alphanumeric characters and dashes (`-`). An
-/// [`InvalidIdentifier`] error is the result of not respecting this restriction.
-#[derive(Debug, Error)]
-pub struct InvalidIdentifier;
-
-impl InvalidIdentifier {
-    const ERROR_MESSAGE: &'static str =
-        "an identifier can only contain alphanumeric characters and dashes ('-')";
-}
-
-impl Display for InvalidIdentifier {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", Self::ERROR_MESSAGE)
     }
 }
 
@@ -544,12 +703,12 @@ impl<'a> Param<'a> {
     /// Allocates the fields of this [`Param`].
     fn into_owned(self) -> Param<'static> {
         Param {
-            name: self.name.into_owned(),
+            name: self.name.into_static(),
             // TODO do this in-place
             values: self
                 .values
                 .into_iter()
-                .map(ParamValue::into_owned)
+                .map(ParamValue::into_static)
                 .collect(),
         }
     }
@@ -561,266 +720,67 @@ impl<'a> Param<'a> {
 #[derive(Debug, Error)]
 pub struct InvalidParam;
 
-impl InvalidParam {
-    const ERROR_MESSAGE: &'static str = "a parameter must have at least 1 value";
-}
-
 impl Display for InvalidParam {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", Self::ERROR_MESSAGE)
+        write!(f, "a parameter must have at least 1 value")
     }
 }
 
-/// A value of a [`Param`].
-///
-/// This is a wrapper around a [`String`] that contains no control characters except horizontal
-/// tabs (`'\t'`) and linefeeds (`'\n'`).
-#[derive(Clone, Debug, Eq, Ord, PartialOrd)]
-pub struct ParamValue<'a> {
-    value: Cow<'a, str>,
-}
+cow_wrapper! {
+    @metainfo {
+        case_sensitive: false,
+        param_name: value,
+        doc_name: "parameter value",
+        error_name: InvalidParamValue,
+        error_message: "a parameter value cannot contain any ascii control characters except horizontal tabs and linefeeds",
+        valid_if: r"contains no ascii control characters except horizontal tabs (`'\t'`) and linefeeds (`'\n'`)",
+    };
 
-impl<'a> ParamValue<'a> {
-    /// Creates a new [`ParamValue`].
-    ///
-    /// # Errors
-    ///
-    /// Fails if the argument contains control characters other than horizontal tabs (`'\t'`) and
-    /// linefeeds (`'\n'`).
-    pub fn new<I: Into<Cow<'a, str>>>(value: I) -> Result<Self, InvalidParamValue> {
-        let value = value.into();
-        if Self::is_valid_param_value(&value) {
-            Ok(Self { value })
-        } else {
-            Err(InvalidParamValue)
-        }
-    }
+    pub struct ParamValue { ... }
 
-    /// Returns the [`&str`] value of this [`ParamValue`].
-    pub fn value(&self) -> &str {
-        &self.value
-    }
+    impl ParamValue {
+        pub const fn is_valid(value: &str) -> bool {
+            let value = value.as_bytes();
 
-    /// Returns the [`String`] value of this [`ParamValue`].
-    pub fn into_value(self) -> String {
-        self.value.into_owned()
-    }
-
-    /// Allocates this [`ParamValue`].
-    pub fn into_owned(self) -> ParamValue<'static> {
-        ParamValue {
-            value: Cow::Owned(self.value.into_owned()),
-        }
-    }
-
-    /// Returns true if `value` is a valid [`ParamValue`] value.
-    const fn is_valid_param_value(value: &str) -> bool {
-        let value = value.as_bytes();
-
-        let mut index = 0;
-        while index < value.len() {
-            if is_control(value[index]) && value[index] != b'\n' {
-                return false;
+            let mut index = 0;
+            while index < value.len() {
+                if is_control(value[index]) && value[index] != b'\n' {
+                    return false;
+                }
+                index += 1;
             }
-            index += 1;
-        }
 
-        true
+            true
+        }
     }
 }
 
-impl ParamValue<'static> {
-    /// Creates a new borrowed [`ParamValue`] with a `'static` lifetime.
-    ///
-    /// # Panics
-    ///
-    /// If `value` is not a valid identifier.
-    pub const fn new_const(value: &'static str) -> Self {
-        if Self::is_valid_param_value(value) {
-            Self {
-                value: Cow::Borrowed(value),
+cow_wrapper! {
+    @metainfo {
+        case_sensitive: false,
+        param_name: value,
+        doc_name: "value",
+        error_name: InvalidValue,
+        error_message: "a value cannot contain any ascii control characters except horizontal tabs",
+        valid_if: r"contains no ascii control characters except horizontal tabs (`'\t'`)",
+    };
+
+    pub struct Value { ... }
+
+    impl Value {
+        pub const fn is_valid(value: &str) -> bool {
+            let value = value.as_bytes();
+
+            let mut index = 0;
+            while index < value.len() {
+                if is_control(value[index]) {
+                    return false;
+                }
+                index += 1;
             }
-        } else {
-            panic!("{}", InvalidParamValue::ERROR_MESSAGE)
+
+            true
         }
-    }
-}
-
-impl<'a> Display for ParamValue<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", &self.value)
-    }
-}
-
-impl<'a> Hash for ParamValue<'a> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.value.hash(state)
-    }
-}
-
-impl<'a> PartialEq for ParamValue<'a> {
-    fn eq(&self, other: &Self) -> bool {
-        *self == other.value.as_ref()
-    }
-}
-
-impl<'a> PartialEq<String> for ParamValue<'a> {
-    fn eq(&self, other: &String) -> bool {
-        *self == other.as_str()
-    }
-}
-
-impl<'a> PartialEq<&str> for ParamValue<'a> {
-    fn eq(&self, other: &&str) -> bool {
-        *self == **other
-    }
-}
-
-impl<'a> PartialEq<str> for ParamValue<'a> {
-    fn eq(&self, other: &str) -> bool {
-        self.value == other
-    }
-}
-
-/// Indicates a failed attempt to create a [`ParamValue`].
-///
-/// This error type is returned if one attempts to create a [`ParamValue`] from a string that
-/// contains control characters other than horizontal tabs (`'\t'`).
-#[derive(Debug, Error)]
-pub struct InvalidParamValue;
-
-impl InvalidParamValue {
-    const ERROR_MESSAGE: &'static str = "param value may not contain any control characters";
-}
-
-impl Display for InvalidParamValue {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", Self::ERROR_MESSAGE)
-    }
-}
-
-/// The value of a [`Contentline`].
-///
-/// This is a wrapper around a [`String`] that contains no control characters except horizontal
-/// tabs (`'\t'`).
-#[derive(Clone, Debug, Eq, Ord, PartialOrd)]
-pub struct Value<'a> {
-    value: Cow<'a, str>,
-}
-
-impl<'a> Value<'a> {
-    /// Creates a new [`Value`].
-    ///
-    /// Fails if the argument contains control characters other than horizontal tabs (`'\t'`).
-    pub fn new<I: Into<Cow<'a, str>>>(value: I) -> Result<Self, InvalidValue> {
-        let value = value.into();
-        if Self::is_valid_value(&value) {
-            Ok(Self { value })
-        } else {
-            Err(InvalidValue)
-        }
-    }
-
-    /// Returns the [`&str`] value of this [`Value`].
-    pub fn value(&self) -> &str {
-        &self.value
-    }
-
-    /// Returns the [`String`] value of this [`Value`].
-    pub fn into_value(self) -> String {
-        self.value.into_owned()
-    }
-
-    /// Allocates this [`Value`].
-    pub fn into_owned(self) -> Value<'static> {
-        Value::<'static> {
-            value: Cow::Owned(self.value.into_owned()),
-        }
-    }
-
-    /// Returns true if `value` is a valid [`Value`] value.
-    const fn is_valid_value(value: &str) -> bool {
-        let value = value.as_bytes();
-
-        let mut index = 0;
-        while index < value.len() {
-            if is_control(value[index]) {
-                return false;
-            }
-            index += 1;
-        }
-
-        true
-    }
-}
-
-impl Value<'static> {
-    /// Creates a new borrowed [`Value`] with a `'static` lifetime.
-    ///
-    /// # Panics
-    ///
-    /// If `value` is not a valid identifier.
-    pub const fn new_const(value: &'static str) -> Self {
-        if Self::is_valid_value(value) {
-            Self {
-                value: Cow::Borrowed(value),
-            }
-        } else {
-            panic!("{}", InvalidValue::ERROR_MESSAGE)
-        }
-    }
-}
-
-impl<'a> Display for Value<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", &self.value)
-    }
-}
-
-impl<'a> Hash for Value<'a> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.value.hash(state)
-    }
-}
-
-impl<'a> PartialEq for Value<'a> {
-    fn eq(&self, other: &Self) -> bool {
-        *self == other.value.as_ref()
-    }
-}
-
-impl<'a> PartialEq<String> for Value<'a> {
-    fn eq(&self, other: &String) -> bool {
-        *self == other.as_str()
-    }
-}
-
-impl<'a> PartialEq<&str> for Value<'a> {
-    fn eq(&self, other: &&str) -> bool {
-        *self == **other
-    }
-}
-
-impl<'a> PartialEq<str> for Value<'a> {
-    fn eq(&self, other: &str) -> bool {
-        self.value == other
-    }
-}
-
-/// Indicates a failed attempt to create a [`Value`].
-///
-/// This error type is returned if one attempts to create a [`Value`] from a string that contains
-/// control characters other than horizontal tabs (`'\t'`).
-#[derive(Debug, Error)]
-pub struct InvalidValue;
-
-impl InvalidValue {
-    const ERROR_MESSAGE: &'static str = "value may not contain any control characters";
-}
-
-impl Display for InvalidValue {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", Self::ERROR_MESSAGE)
     }
 }
 
@@ -1019,7 +979,7 @@ fn parse_param_value_rfc6868(param_value: &str) -> Cow<str> {
         None => Cow::Borrowed(param_value),
     };
 
-    debug_assert!(ParamValue::is_valid_param_value(&param_value));
+    debug_assert!(ParamValue::is_valid(&param_value));
 
     param_value
 }
@@ -1030,7 +990,7 @@ fn parse_param_value_rfc6868(param_value: &str) -> Cow<str> {
 ///
 /// Fails if the argument contains control characters other than horizontal tabs.
 fn parse_value<'a>(contentline: &mut &'a str) -> Result<Value<'a>, IntermediateParsingError> {
-    if Value::is_valid_value(contentline) {
+    if Value::is_valid(contentline) {
         let value = Value {
             value: Cow::Borrowed(contentline),
         };
@@ -1062,7 +1022,7 @@ fn parse_identifier<'a>(
         let identifier = &contentline[..identifier_length];
         *contentline = &contentline[identifier_length..];
 
-        debug_assert!(Identifier::is_valid_identifier(identifier));
+        debug_assert!(Identifier::is_valid(identifier));
         let identifier = Identifier {
             value: Cow::Borrowed(identifier),
         };
@@ -1242,35 +1202,6 @@ const fn is_identifier_char(c: u8) -> bool {
 
 #[cfg(test)]
 mod tests {
-    mod const_constructors {
-        use crate::{Identifier, ParamValue, Value};
-
-        #[test]
-        fn valid() {
-            Identifier::new_const("IDENTIFIER");
-            ParamValue::new_const("PARAM_VALUE");
-            Value::new_const("VALUE");
-        }
-
-        #[test]
-        #[should_panic]
-        fn invalid_identifier() {
-            Identifier::new_const("INVALID IDENTIFIER");
-        }
-
-        #[test]
-        #[should_panic]
-        fn invalid_param_value() {
-            ParamValue::new_const("INVALID PARAM VALUE\r");
-        }
-
-        #[test]
-        #[should_panic]
-        fn invalid_value() {
-            Value::new_const("INVALID VALUE\n");
-        }
-    }
-
     mod parse {
         use {
             crate::{Contentline, Identifier, Param, ParamValue, Parser, Value},
@@ -1286,9 +1217,9 @@ mod tests {
                 parser.parse_next_line().unwrap().unwrap(),
                 Contentline {
                     group: None,
-                    name: Identifier::new("NOTE").unwrap(),
+                    name: Identifier::new_borrowed("NOTE").unwrap(),
                     params: Vec::new(),
-                    value: Value::new("This is a note.").unwrap(),
+                    value: Value::new_borrowed("This is a note.").unwrap(),
                 }
             );
             assert!(parser.parse_next_line().is_none());
@@ -1303,21 +1234,21 @@ mod tests {
             assert_eq!(
                 parser.parse_next_line().unwrap().unwrap(),
                 Contentline {
-                    group: Some(Identifier::new("test-group").unwrap()),
-                    name: Identifier::new("TEST-CASE").unwrap(),
+                    group: Some(Identifier::new_borrowed("test-group").unwrap()),
+                    name: Identifier::new_borrowed("TEST-CASE").unwrap(),
                     params: vec![
                         Param::new(
-                            Identifier::new("test-param").unwrap(),
-                            vec![ParamValue::new("PARAM1").unwrap()]
+                            Identifier::new_borrowed("test-param").unwrap(),
+                            vec![ParamValue::new_borrowed("PARAM1").unwrap()]
                         )
                         .unwrap(),
                         Param::new(
-                            Identifier::new("another-test-param").unwrap(),
-                            vec![ParamValue::new("PARAM2").unwrap()]
+                            Identifier::new_borrowed("another-test-param").unwrap(),
+                            vec![ParamValue::new_borrowed("PARAM2").unwrap()]
                         )
                         .unwrap(),
                     ],
-                    value: Value::new("value").unwrap(),
+                    value: Value::new_borrowed("value").unwrap(),
                 }
             );
             assert!(parser.parse_next_line().is_none());
@@ -1332,9 +1263,9 @@ mod tests {
                 parser.parse_next_line().unwrap().unwrap(),
                 Contentline {
                     group: None,
-                    name: Identifier::new("EMPTY-VALUE").unwrap(),
+                    name: Identifier::new_borrowed("EMPTY-VALUE").unwrap(),
                     params: Vec::new(),
-                    value: Value::new("").unwrap(),
+                    value: Value::new_borrowed("").unwrap(),
                 }
             );
             assert!(parser.parse_next_line().is_none());
@@ -1349,27 +1280,27 @@ mod tests {
                 parser.parse_next_line().unwrap().unwrap(),
                 Contentline {
                     group: None,
-                    name: Identifier::new("EMPTY-PARAM").unwrap(),
+                    name: Identifier::new_borrowed("EMPTY-PARAM").unwrap(),
                     params: vec![
                         Param::new(
-                            Identifier::new("paramtext").unwrap(),
-                            vec![ParamValue::new("").unwrap()]
+                            Identifier::new_borrowed("paramtext").unwrap(),
+                            vec![ParamValue::new_borrowed("").unwrap()]
                         )
                         .unwrap(),
                         Param::new(
-                            Identifier::new("quoted-string").unwrap(),
-                            vec![ParamValue::new("").unwrap()]
+                            Identifier::new_borrowed("quoted-string").unwrap(),
+                            vec![ParamValue::new_borrowed("").unwrap()]
                         )
                         .unwrap(),
                         Param::new(
-                            Identifier::new("multiple").unwrap(),
-                            iter::repeat(ParamValue::new("").unwrap())
+                            Identifier::new_borrowed("multiple").unwrap(),
+                            iter::repeat(ParamValue::new_borrowed("").unwrap())
                                 .take(11)
                                 .collect()
                         )
                         .unwrap(),
                     ],
-                    value: Value::new("value").unwrap(),
+                    value: Value::new_borrowed("value").unwrap(),
                 }
             );
             assert!(parser.parse_next_line().is_none());
@@ -1400,40 +1331,40 @@ mod tests {
                 parser.parse_next_line().unwrap().unwrap(),
                 Contentline {
                     group: None,
-                    name: Identifier::new("RFC6868-TEST").unwrap(),
+                    name: Identifier::new_borrowed("RFC6868-TEST").unwrap(),
                     params: vec![
                         Param::new(
-                            Identifier::new("caret").unwrap(),
-                            vec![ParamValue::new("^").unwrap()]
+                            Identifier::new_borrowed("caret").unwrap(),
+                            vec![ParamValue::new_borrowed("^").unwrap()]
                         )
                         .unwrap(),
                         Param::new(
-                            Identifier::new("newline").unwrap(),
-                            vec![ParamValue::new("\n").unwrap()]
+                            Identifier::new_borrowed("newline").unwrap(),
+                            vec![ParamValue::new_borrowed("\n").unwrap()]
                         )
                         .unwrap(),
                         Param::new(
-                            Identifier::new("double-quote").unwrap(),
-                            vec![ParamValue::new("\"").unwrap()]
+                            Identifier::new_borrowed("double-quote").unwrap(),
+                            vec![ParamValue::new_borrowed("\"").unwrap()]
                         )
                         .unwrap(),
                         Param::new(
-                            Identifier::new("all-in-quotes").unwrap(),
-                            vec![ParamValue::new("^\n\"").unwrap()]
+                            Identifier::new_borrowed("all-in-quotes").unwrap(),
+                            vec![ParamValue::new_borrowed("^\n\"").unwrap()]
                         )
                         .unwrap(),
                         Param::new(
-                            Identifier::new("weird").unwrap(),
-                            vec![ParamValue::new("^^n").unwrap()]
+                            Identifier::new_borrowed("weird").unwrap(),
+                            vec![ParamValue::new_borrowed("^^n").unwrap()]
                         )
                         .unwrap(),
                         Param::new(
-                            Identifier::new("others").unwrap(),
-                            vec![ParamValue::new("^g^5^k^?^%^&^a").unwrap()]
+                            Identifier::new_borrowed("others").unwrap(),
+                            vec![ParamValue::new_borrowed("^g^5^k^?^%^&^a").unwrap()]
                         )
                         .unwrap(),
                     ],
-                    value: Value::new("value").unwrap(),
+                    value: Value::new_borrowed("value").unwrap(),
                 }
             );
             assert!(parser.parse_next_line().is_none());
@@ -1450,9 +1381,9 @@ mod tests {
         fn name_and_value() {
             let contentline = Contentline {
                 group: None,
-                name: Identifier::new("NAME").unwrap(),
+                name: Identifier::new_borrowed("NAME").unwrap(),
                 params: Vec::new(),
-                value: Value::new("VALUE").unwrap(),
+                value: Value::new_borrowed("VALUE").unwrap(),
             };
 
             let expected = "NAME:VALUE\r\n";
@@ -1470,21 +1401,21 @@ mod tests {
         #[test]
         fn group_name_params_value() {
             let contentline = Contentline {
-                group: Some(Identifier::new("TEST-GROUP").unwrap()),
-                name: Identifier::new("TEST-NAME").unwrap(),
+                group: Some(Identifier::new_borrowed("TEST-GROUP").unwrap()),
+                name: Identifier::new_borrowed("TEST-NAME").unwrap(),
                 params: vec![
                     Param::new(
-                        Identifier::new("PARAM-1").unwrap(),
-                        vec![ParamValue::new("param value 1").unwrap()],
+                        Identifier::new_borrowed("PARAM-1").unwrap(),
+                        vec![ParamValue::new_borrowed("param value 1").unwrap()],
                     )
                     .unwrap(),
                     Param::new(
-                        Identifier::new("PARAM-2").unwrap(),
-                        vec![ParamValue::new("param value of parameter: 2").unwrap()],
+                        Identifier::new_borrowed("PARAM-2").unwrap(),
+                        vec![ParamValue::new_borrowed("param value of parameter: 2").unwrap()],
                     )
                     .unwrap(),
                 ],
-                value: Value::new("test value \"with quotes\"").unwrap(),
+                value: Value::new_borrowed("test value \"with quotes\"").unwrap(),
             };
 
             let expected = "\
@@ -1505,14 +1436,14 @@ TEST-GROUP.TEST-NAME;PARAM-1=param value 1;PARAM-2=\"param value of paramete\r
         #[test]
         fn identfiers_converted_to_uppercase() {
             let contentline = Contentline {
-                group: Some(Identifier::new("lower-group").unwrap()),
-                name: Identifier::new("name").unwrap(),
+                group: Some(Identifier::new_borrowed("lower-group").unwrap()),
+                name: Identifier::new_borrowed("name").unwrap(),
                 params: vec![Param::new(
-                    Identifier::new("PaRaM").unwrap(),
-                    vec![ParamValue::new("param value").unwrap()],
+                    Identifier::new_borrowed("PaRaM").unwrap(),
+                    vec![ParamValue::new_borrowed("param value").unwrap()],
                 )
                 .unwrap()],
-                value: Value::new("value").unwrap(),
+                value: Value::new_borrowed("value").unwrap(),
             };
 
             let expected = "LOWER-GROUP.NAME;PARAM=param value:value\r\n";
@@ -1531,9 +1462,9 @@ TEST-GROUP.TEST-NAME;PARAM-1=param value 1;PARAM-2=\"param value of paramete\r
         fn empty_value() {
             let contentline = Contentline {
                 group: None,
-                name: Identifier::new("NAME").unwrap(),
+                name: Identifier::new_borrowed("NAME").unwrap(),
                 params: Vec::new(),
-                value: Value::new("").unwrap(),
+                value: Value::new_borrowed("").unwrap(),
             };
 
             let expected = "NAME:\r\n";
@@ -1554,15 +1485,15 @@ TEST-GROUP.TEST-NAME;PARAM-1=param value 1;PARAM-2=\"param value of paramete\r
 
             let contentline = Contentline {
                 group: None,
-                name: Identifier::new("NAME").unwrap(),
+                name: Identifier::new_borrowed("NAME").unwrap(),
                 params: vec![Param::new(
-                    Identifier::new("PARAM").unwrap(),
-                    iter::repeat(ParamValue::new("").unwrap())
+                    Identifier::new_borrowed("PARAM").unwrap(),
+                    iter::repeat(ParamValue::new_borrowed("").unwrap())
                         .take(num_params)
                         .collect(),
                 )
                 .unwrap()],
-                value: Value::new("value").unwrap(),
+                value: Value::new_borrowed("value").unwrap(),
             };
 
             let expected = {
@@ -1586,35 +1517,35 @@ TEST-GROUP.TEST-NAME;PARAM-1=param value 1;PARAM-2=\"param value of paramete\r
         fn rfc6868() {
             let contentline = Contentline {
                 group: None,
-                name: Identifier::new("RFC6868-TEST").unwrap(),
+                name: Identifier::new_borrowed("RFC6868-TEST").unwrap(),
                 params: vec![
                     Param::new(
-                        Identifier::new("CARET").unwrap(),
-                        vec![ParamValue::new("^").unwrap()],
+                        Identifier::new_borrowed("CARET").unwrap(),
+                        vec![ParamValue::new_borrowed("^").unwrap()],
                     )
                     .unwrap(),
                     Param::new(
-                        Identifier::new("NEWLINE").unwrap(),
-                        vec![ParamValue::new("\n").unwrap()],
+                        Identifier::new_borrowed("NEWLINE").unwrap(),
+                        vec![ParamValue::new_borrowed("\n").unwrap()],
                     )
                     .unwrap(),
                     Param::new(
-                        Identifier::new("DOUBLE-QUOTE").unwrap(),
-                        vec![ParamValue::new("\"").unwrap()],
+                        Identifier::new_borrowed("DOUBLE-QUOTE").unwrap(),
+                        vec![ParamValue::new_borrowed("\"").unwrap()],
                     )
                     .unwrap(),
                     Param::new(
-                        Identifier::new("ALL-IN-QUOTES").unwrap(),
-                        vec![ParamValue::new("^;\n;\"").unwrap()],
+                        Identifier::new_borrowed("ALL-IN-QUOTES").unwrap(),
+                        vec![ParamValue::new_borrowed("^;\n;\"").unwrap()],
                     )
                     .unwrap(),
                     Param::new(
-                        Identifier::new("WEIRD").unwrap(),
-                        vec![ParamValue::new("^^n").unwrap()],
+                        Identifier::new_borrowed("WEIRD").unwrap(),
+                        vec![ParamValue::new_borrowed("^^n").unwrap()],
                     )
                     .unwrap(),
                 ],
-                value: Value::new("value").unwrap(),
+                value: Value::new_borrowed("value").unwrap(),
             };
 
             let expected = "RFC6868-TEST;CARET=^^;NEWLINE=^n;DOUBLE-QUOTE=^';ALL-IN-QUOTES=\"^^;^n;^'\";W\r\n EIRD=^^^^n:value\r\n";
