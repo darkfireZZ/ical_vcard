@@ -114,7 +114,7 @@ impl<R: Read> Iterator for Parser<R> {
     type Item = Result<Contentline<'static>, ParseError>;
     fn next(&mut self) -> Option<Self::Item> {
         self.parse_next_line()
-            .map(|result| result.map(|contentline| contentline.into_owned()))
+            .map(|result| result.map(|contentline| contentline.into_static()))
     }
 }
 
@@ -373,13 +373,15 @@ impl<'a> Contentline<'a> {
         Ok(())
     }
 
-    /// Allocates the fields of this [`Contentline`].
-    pub fn into_owned(self) -> Contentline<'static> {
+    /// Converts this [`Contentline`] into a [`Contentline`] with a `'static` lifetime.
+    ///
+    /// Allocates the fields of the [`Contentline`] as necessary.
+    pub fn into_static(self) -> Contentline<'static> {
         Contentline {
             group: self.group.map(Identifier::into_static),
             name: self.name.into_static(),
             // TODO do this in-place
-            params: self.params.into_iter().map(Param::into_owned).collect(),
+            params: self.params.into_iter().map(Param::into_static).collect(),
             value: self.value.into_static(),
         }
     }
@@ -732,8 +734,10 @@ impl<'a> Param<'a> {
         }
     }
 
-    /// Allocates the fields of this [`Param`].
-    fn into_owned(self) -> Param<'static> {
+    /// Converts this [`Param`] into a [`Param`] with a `'static` lifetime.
+    ///
+    /// Allocates the fields of the [`Param`] as necessary.
+    fn into_static(self) -> Param<'static> {
         Param {
             name: self.name.into_static(),
             // TODO do this in-place
