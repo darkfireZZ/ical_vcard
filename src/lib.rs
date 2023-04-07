@@ -321,7 +321,7 @@ impl<'a> Contentline<'a> {
     /// # Errors
     ///
     /// Fails if the given content line is incorrectly formatted.
-    fn parse(mut contentline: &'a str) -> Result<Self, ParseContentlineError> {
+    pub fn parse(mut contentline: &'a str) -> Result<Self, ParseContentlineError> {
         let error = || ParseContentlineError {
             invalid_contentline: contentline.to_owned(),
         };
@@ -386,8 +386,6 @@ impl<'a> Contentline<'a> {
         }
     }
 }
-
-// TODO implement FromStr for Contentline
 
 impl<'a> Display for Contentline<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
