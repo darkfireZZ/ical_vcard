@@ -735,7 +735,7 @@ impl<'a> Param<'a> {
     /// Converts this [`Param`] into a [`Param`] with a `'static` lifetime.
     ///
     /// Allocates the fields of the [`Param`] as necessary.
-    fn into_static(self) -> Param<'static> {
+    pub fn into_static(self) -> Param<'static> {
         Param {
             name: self.name.into_static(),
             // TODO do this in-place
