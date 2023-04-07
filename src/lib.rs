@@ -746,6 +746,21 @@ impl<'a> Param<'a> {
                 .collect(),
         }
     }
+
+    /// Returns the name of this [`Param`].
+    pub fn name(&self) -> &Identifier<'a> {
+        &self.name
+    }
+
+    /// Returns an [`Iterator`] of the values of this [`Param`].
+    pub fn values(&self) -> impl Iterator<Item = &ParamValue<'a>> {
+        self.values.iter()
+    }
+
+    /// Returns a tuple `(name, values)` containing the name and the values of this [`Param`].
+    pub fn into_name_and_values(self) -> (Identifier<'a>, Vec<ParamValue<'a>>) {
+        (self.name, self.values)
+    }
 }
 
 /// Indicates a failed attempt to create a [`Param`].
