@@ -688,6 +688,7 @@ cow_wrapper! {
         valid_if: "is not empty and all characters are alphanumeric ascii characters or dashes (`-`)",
     };
 
+    // TODO write in documentation that this is case-insensitive
     pub struct Identifier { ... }
 
     impl Identifier {
