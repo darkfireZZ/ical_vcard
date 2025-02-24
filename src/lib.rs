@@ -81,7 +81,7 @@ impl<R: Read> Parser<R> {
 }
 
 impl<R: Read> Iterator for Parser<R> {
-    type Item = Result<Contentline<String, String>, ParseError>;
+    type Item = Result<Contentline, ParseError>;
     fn next(&mut self) -> Option<Self::Item> {
         match self.unfolder.next_line()? {
             Ok(next_line) => {
@@ -129,7 +129,7 @@ pub enum ParseError {
 ///     Contentline::try_new("BEGIN", "VCARD")?,
 ///     Contentline::try_new("FN", "Mr. John Example")?,
 ///     Contentline::try_new("BDAY", "20230326")?
-///         .set_params([Param::try_new("VALUE", &["date-and-or-time"])?]),
+///         .try_add_param("VALUE", ["date-and-or-time"])?,
 ///     Contentline::try_new("END", "VCARD")?,
 /// ];
 ///
@@ -176,11 +176,7 @@ impl<W: Write> Writer<W> {
     /// # Errors
     ///
     /// Fails in case of an [`io::Error`].
-    pub fn write<N, V>(&mut self, contentline: &Contentline<N, V>) -> io::Result<()>
-    where
-        N: AsRef<str>,
-        V: AsRef<str>,
-    {
+    pub fn write(&mut self, contentline: &Contentline) -> io::Result<()> {
         contentline.write(|s| self.folder.write(s))?;
         self.folder.end_line()?;
         self.folder.flush()
@@ -193,12 +189,10 @@ impl<W: Write> Writer<W> {
     /// # Errors
     ///
     /// Fails in case of an [`io::Error`].
-    pub fn write_all<C, I, N, V>(&mut self, contentlines: I) -> io::Result<()>
+    pub fn write_all<C, I>(&mut self, contentlines: I) -> io::Result<()>
     where
-        C: Borrow<Contentline<N, V>>,
+        C: Borrow<Contentline>,
         I: IntoIterator<Item = C>,
-        N: AsRef<str>,
-        V: AsRef<str>,
     {
         for line in contentlines {
             line.borrow().write(|s| self.folder.write(s))?;
@@ -233,23 +227,19 @@ impl<W: Write> Writer<W> {
 /// 3. Optionally, a `group` which can be used to group related content lines
 /// 4. Optionally, a list of parameters to add meta-information or additional details that don't fit
 ///    into the `value` field particularly well
-#[derive(Clone, Debug, Eq, Hash)]
-pub struct Contentline<N: AsRef<str>, V: AsRef<str>> {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Contentline {
     /// The group of the content line.
     group: Option<Identifier<String>>,
     /// The name of the content line.
-    name: Identifier<N>,
+    name: Identifier<String>,
     /// The parameters of the content line.
     params: Vec<Param>,
     /// The value of the content line.
-    value: Value<V>,
+    value: Value<String>,
 }
 
-impl<N, V> Contentline<N, V>
-where
-    N: AsRef<str>,
-    V: AsRef<str>,
-{
+impl Contentline {
     /// Get the group of the content line.
     pub fn group(&self) -> Option<&str> {
         self.group.as_ref().map(|group| group.as_ref())
@@ -275,9 +265,15 @@ where
     /// # Errors
     ///
     /// Fails if either name is not a valid [`Identifier`] or value is not a valid [`Value`].
-    pub fn try_new(name: N, value: V) -> Result<Self, InvalidContentline> {
-        let name = Identifier::new(name).map_err(InvalidContentline::InvalidName)?;
-        let value = Value::new(value).map_err(InvalidContentline::InvalidValue)?;
+    pub fn try_new<N, V>(name: N, value: V) -> Result<Self, InvalidContentline>
+    where
+        N: AsRef<str>,
+        V: AsRef<str>,
+    {
+        let name =
+            Identifier::new(name.as_ref().to_owned()).map_err(InvalidContentline::InvalidName)?;
+        let value =
+            Value::new(value.as_ref().to_owned()).map_err(InvalidContentline::InvalidValue)?;
 
         Ok(Self {
             group: None,
@@ -312,15 +308,11 @@ where
     }
 
     /// Adds a parameter to the [`Contentline`].
-    pub fn try_add_param<I, Pname, Pvalue>(
-        self,
-        name: Pname,
-        values: I,
-    ) -> Result<Self, InvalidParam>
+    pub fn try_add_param<I, N, V>(self, name: N, values: I) -> Result<Self, InvalidParam>
     where
-        I: IntoIterator<Item = Pvalue>,
-        Pname: AsRef<str>,
-        Pvalue: AsRef<str>,
+        I: IntoIterator<Item = V>,
+        N: AsRef<str>,
+        V: AsRef<str>,
     {
         let param = Param::try_new(name, values)?;
 
@@ -335,14 +327,46 @@ where
     }
 
     /// Sets the parameters of the [`Contentline`].
-    pub fn set_params<P>(self, params: P) -> Self
+    pub fn try_set_params<I, P>(self, params: I) -> Result<Self, P::Error>
     where
-        P: IntoIterator<Item = Param>,
+        I: IntoIterator<Item = P>,
+        P: TryInto<Param>,
     {
-        Self {
-            params: params.into_iter().collect(),
+        Ok(Self {
+            params: params
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
             ..self
+        })
+    }
+
+    /// Parses a [`Contentline`].
+    ///
+    /// # Errors
+    ///
+    /// Fails if the given content line is incorrectly formatted.
+    fn parse(mut contentline: &str) -> Result<Self, ParseContentlineError> {
+        let error = || ParseContentlineError {
+            invalid_contentline: contentline.to_owned(),
+        };
+
+        let (group, name) = parse_group_and_name(&mut contentline).map_err(|_| error())?;
+        let params = parse_params(&mut contentline).map_err(|_| error())?;
+
+        if !contentline.starts_with(':') {
+            return Err(error());
         }
+        contentline = &contentline[1..];
+
+        let value = parse_value(&mut contentline).map_err(|_| error())?;
+
+        Ok(Contentline {
+            group,
+            name,
+            params,
+            value,
+        })
     }
 
     /// Writes this [`Contentline`] using a given function.
@@ -375,38 +399,8 @@ where
     }
 }
 
-impl Contentline<String, String> {
-    /// Parses a [`Contentline`].
-    ///
-    /// # Errors
-    ///
-    /// Fails if the given content line is incorrectly formatted.
-    fn parse(mut contentline: &str) -> Result<Self, ParseContentlineError> {
-        let error = || ParseContentlineError {
-            invalid_contentline: contentline.to_owned(),
-        };
-
-        let (group, name) = parse_group_and_name(&mut contentline).map_err(|_| error())?;
-        let params = parse_params(&mut contentline).map_err(|_| error())?;
-
-        if !contentline.starts_with(':') {
-            return Err(error());
-        }
-        contentline = &contentline[1..];
-
-        let value = parse_value(&mut contentline).map_err(|_| error())?;
-
-        Ok(Contentline {
-            group,
-            name,
-            params,
-            value,
-        })
-    }
-}
-
 // TODO: Test this
-impl FromStr for Contentline<String, String> {
+impl FromStr for Contentline {
     type Err = ParseContentlineError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -414,28 +408,9 @@ impl FromStr for Contentline<String, String> {
     }
 }
 
-impl<N, V> Display for Contentline<N, V>
-where
-    N: AsRef<str>,
-    V: AsRef<str>,
-{
+impl Display for Contentline {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         self.write(|s| f.write_str(s))
-    }
-}
-
-impl<N1, N2, V1, V2> PartialEq<Contentline<N2, V2>> for Contentline<N1, V1>
-where
-    N1: AsRef<str>,
-    N2: AsRef<str>,
-    V1: AsRef<str>,
-    V2: AsRef<str>,
-{
-    fn eq(&self, other: &Contentline<N2, V2>) -> bool {
-        self.group == other.group
-            && self.name == other.name
-            && self.params == other.params
-            && self.value == other.value
     }
 }
 
@@ -709,7 +684,19 @@ pub struct Param {
 }
 
 impl Param {
-    // TODO: Make this generic over values
+    /// Get the name of the parameter.
+    pub fn name(&self) -> &str {
+        self.name.as_ref()
+    }
+
+    // TODO: It would be better to not return `ParamValue`s but rather some standard library type
+    /// Get the values of the parameter.
+    ///
+    /// The values are guaranteed to be non-empty.
+    pub fn values(&self) -> &[ParamValue<String>] {
+        &self.values
+    }
+
     /// Creates a new [`Param`].
     ///
     /// # Errors
@@ -733,6 +720,19 @@ impl Param {
         let name = Identifier::new(name.as_ref().to_owned()).map_err(InvalidParam::InvalidName)?;
 
         Ok(Self { name, values })
+    }
+}
+
+impl<I, N, V> TryFrom<(N, I)> for Param
+where
+    I: IntoIterator<Item = V>,
+    N: AsRef<str>,
+    V: AsRef<str>,
+{
+    type Error = InvalidParam;
+
+    fn try_from((name, values): (N, I)) -> Result<Self, Self::Error> {
+        Param::try_new(name, values)
     }
 }
 
@@ -1232,7 +1232,7 @@ const fn is_identifier_char(c: u8) -> bool {
 #[cfg(test)]
 mod tests {
     mod parse {
-        use crate::{Contentline, Param, Parser};
+        use crate::{Contentline, Parser};
 
         #[test]
         fn name_and_value() {
@@ -1258,10 +1258,11 @@ mod tests {
                     .unwrap()
                     .try_set_group("test-group")
                     .unwrap()
-                    .set_params([
-                        Param::try_new("test-param", ["PARAM1"]).unwrap(),
-                        Param::try_new("another-test-param", ["PARAM2"]).unwrap(),
+                    .try_set_params([
+                        ("test-param", ["PARAM1"]),
+                        ("another-test-param", ["PARAM2"])
                     ])
+                    .unwrap()
             );
             assert!(parser.next().is_none());
         }
@@ -1287,11 +1288,12 @@ mod tests {
                 parser.next().unwrap().unwrap(),
                 Contentline::try_new("EMPTY-PARAM", "value")
                     .unwrap()
-                    .set_params([
-                        Param::try_new("paramtext", [""]).unwrap(),
-                        Param::try_new("quoted-string", [""]).unwrap(),
-                        Param::try_new("multiple", [""; 11]).unwrap(),
+                    .try_set_params([
+                        ("paramtext", [""].as_slice()),
+                        ("quoted-string", &[""]),
+                        ("multiple", &[""; 11])
                     ])
+                    .unwrap()
             );
             assert!(parser.next().is_none());
         }
@@ -1321,14 +1323,15 @@ mod tests {
                 parser.next().unwrap().unwrap(),
                 Contentline::try_new("RFC6868-TEST", "value")
                     .unwrap()
-                    .set_params([
-                        Param::try_new("caret", ["^"]).unwrap(),
-                        Param::try_new("newline", ["\n"]).unwrap(),
-                        Param::try_new("double-quote", ["\""]).unwrap(),
-                        Param::try_new("all-in-quotes", ["^\n\""]).unwrap(),
-                        Param::try_new("weird", ["^^n"]).unwrap(),
-                        Param::try_new("others", ["^g^5^k^?^%^&^a"]).unwrap(),
+                    .try_set_params([
+                        ("caret", ["^"]),
+                        ("newline", ["\n"]),
+                        ("double-quote", ["\""]),
+                        ("all-in-quotes", ["^\n\""]),
+                        ("weird", ["^^n"]),
+                        ("others", ["^g^5^k^?^%^&^a"]),
                     ])
+                    .unwrap()
             );
             assert!(parser.next().is_none());
         }
@@ -1336,7 +1339,7 @@ mod tests {
 
     mod write {
         use {
-            crate::{Contentline, Param, Writer},
+            crate::{Contentline, Writer},
             std::{iter, str},
         };
 
@@ -1362,10 +1365,11 @@ mod tests {
                 .unwrap()
                 .try_set_group("TEST-GROUP")
                 .unwrap()
-                .set_params([
-                    Param::try_new("PARAM-1", ["param value 1"]).unwrap(),
-                    Param::try_new("PARAM-2", ["param value of parameter: 2"]).unwrap(),
-                ]);
+                .try_set_params([
+                    ("PARAM-1", ["param value 1"]),
+                    ("PARAM-2", ["param value of parameter: 2"]),
+                ])
+                .unwrap();
 
             let expected = "\
 TEST-GROUP.TEST-NAME;PARAM-1=param value 1;PARAM-2=\"param value of paramete\r
@@ -1449,13 +1453,14 @@ TEST-GROUP.TEST-NAME;PARAM-1=param value 1;PARAM-2=\"param value of paramete\r
         fn rfc6868() {
             let contentline = Contentline::try_new("RFC6868-TEST", "value")
                 .unwrap()
-                .set_params([
-                    Param::try_new("CARET", ["^"]).unwrap(),
-                    Param::try_new("NEWLINE", ["\n"]).unwrap(),
-                    Param::try_new("DOUBLE-QUOTE", ["\""]).unwrap(),
-                    Param::try_new("ALL-IN-QUOTES", ["^;\n;\""]).unwrap(),
-                    Param::try_new("WEIRD", ["^^n"]).unwrap(),
-                ]);
+                .try_set_params([
+                    ("CARET", ["^"]),
+                    ("NEWLINE", ["\n"]),
+                    ("DOUBLE-QUOTE", ["\""]),
+                    ("ALL-IN-QUOTES", ["^;\n;\""]),
+                    ("WEIRD", ["^^n"]),
+                ])
+                .unwrap();
 
             let expected = "RFC6868-TEST;CARET=^^;NEWLINE=^n;DOUBLE-QUOTE=^';ALL-IN-QUOTES=\"^^;^n;^'\";W\r\n EIRD=^^^^n:value\r\n";
 

@@ -98,7 +98,7 @@ let contentlines = names.into_iter()
         Contentline::try_new("FN", name.to_owned()).unwrap(),
         Contentline::try_new("N", format!(";{name};;;")).unwrap(),
         Contentline::try_new("EMAIL", format!("{name}@ancient-philosophers.gr", name = name.to_lowercase())).unwrap()
-            .set_params([Param::try_new("TYPE", ["work"]).unwrap()]),
+            .try_add_param("TYPE", ["work"]).unwrap(),
         Contentline::try_new("END", "VCARD".to_owned()).unwrap(),
     ]);
 
