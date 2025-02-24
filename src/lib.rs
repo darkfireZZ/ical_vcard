@@ -8,7 +8,7 @@ use {
     crate::folding::{FoldingWriter, UnfoldingReader},
     std::{
         borrow::Borrow,
-        fmt::{self, Display, Formatter},
+        fmt::{self, Debug, Display, Formatter},
         hash::{Hash, Hasher},
         io::{self, Read, Write},
         iter::Iterator,
@@ -262,6 +262,23 @@ impl Contentline {
 
     /// Creates a new [`Contentline`].
     ///
+    /// See [`Contentline::try_new`] for a non-panicking version.
+    ///
+    /// # Panics
+    ///
+    /// Panics whenever [`Contentline::try_new`] would return an error.
+    pub fn new<N, V>(name: N, value: V) -> Self
+    where
+        N: AsRef<str>,
+        V: AsRef<str>,
+    {
+        Self::try_new(name, value).unwrap()
+    }
+
+    /// Creates a new [`Contentline`].
+    ///
+    /// See [`Contentline::new`] for a panicking version.
+    ///
     /// # Errors
     ///
     /// Fails if either name is not a valid [`Identifier`] or value is not a valid [`Value`].
@@ -284,6 +301,22 @@ impl Contentline {
     }
 
     /// Sets the group of the [`Contentline`].
+    ///
+    /// See [`Contentline::try_set_group`] for a non-panicking version.
+    ///
+    /// # Panics
+    ///
+    /// Panics whenever [`Contentline::try_set_group`] would return an error.
+    pub fn set_group<G>(self, group: G) -> Self
+    where
+        G: AsRef<str>,
+    {
+        Self::try_set_group(self, group).unwrap()
+    }
+
+    /// Sets the group of the [`Contentline`].
+    ///
+    /// See [`Contentline::set_group`] for a panicking version.
     ///
     /// # Errors
     ///
@@ -308,6 +341,28 @@ impl Contentline {
     }
 
     /// Adds a parameter to the [`Contentline`].
+    ///
+    /// See [`Contentline::try_add_param`] for a non-panicking version.
+    ///
+    /// # Panics
+    ///
+    /// Panics whenever [`Contentline::try_add_param`] would return an error.
+    pub fn add_param<I, N, V>(self, name: N, values: I) -> Self
+    where
+        I: IntoIterator<Item = V>,
+        N: AsRef<str>,
+        V: AsRef<str>,
+    {
+        Self::try_add_param(self, name, values).unwrap()
+    }
+
+    /// Adds a parameter to the [`Contentline`].
+    ///
+    /// See [`Contentline::add_param`] for a panicking version.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the parameter is invalid.
     pub fn try_add_param<I, N, V>(self, name: N, values: I) -> Result<Self, InvalidParam>
     where
         I: IntoIterator<Item = V>,
@@ -327,6 +382,28 @@ impl Contentline {
     }
 
     /// Sets the parameters of the [`Contentline`].
+    ///
+    /// See [`Contentline::try_set_params`] for a non-panicking version.
+    ///
+    /// # Panics
+    ///
+    /// Panics whenever [`Contentline::try_set_params`] would return an error.
+    pub fn set_params<I, P>(self, params: I) -> Self
+    where
+        I: IntoIterator<Item = P>,
+        P: TryInto<Param>,
+        P::Error: Debug,
+    {
+        self.try_set_params(params).unwrap()
+    }
+
+    /// Sets the parameters of the [`Contentline`].
+    ///
+    /// See [`Contentline::set_params`] for a panicking version.
+    ///
+    /// # Errors
+    ///
+    /// Fails if any parameter is invalid.
     pub fn try_set_params<I, P>(self, params: I) -> Result<Self, P::Error>
     where
         I: IntoIterator<Item = P>,
@@ -699,9 +776,28 @@ impl Param {
 
     /// Creates a new [`Param`].
     ///
+    /// See [`Param::try_new`] for a non-panicking version.
+    ///
     /// # Errors
     ///
-    /// Fails if `values` is empty.
+    /// Fails whenever [`Param::try_new`] would return an error.
+    pub fn new<I, N, V>(name: N, values: I) -> Self
+    where
+        I: IntoIterator<Item = V>,
+        N: AsRef<str>,
+        V: AsRef<str>,
+    {
+        Self::try_new(name, values).unwrap()
+    }
+
+    /// Creates a new [`Param`].
+    ///
+    /// # Errors
+    ///
+    /// Fails in any of the following cases:
+    /// - The parameter name is invalid.
+    /// - A parameter value is invalid.
+    /// - `values` is empty.
     pub fn try_new<I, N, V>(name: N, values: I) -> Result<Self, InvalidParam>
     where
         I: IntoIterator<Item = V>,
@@ -1241,7 +1337,7 @@ mod tests {
 
             assert_eq!(
                 parser.next().unwrap().unwrap(),
-                Contentline::try_new("NOTE", "This is a note.").unwrap()
+                Contentline::new("NOTE", "This is a note."),
             );
             assert!(parser.next().is_none());
         }
@@ -1254,15 +1350,12 @@ mod tests {
 
             assert_eq!(
                 parser.next().unwrap().unwrap(),
-                Contentline::try_new("TEST-CASE", "value")
-                    .unwrap()
-                    .try_set_group("test-group")
-                    .unwrap()
-                    .try_set_params([
+                Contentline::new("TEST-CASE", "value")
+                    .set_group("test-group")
+                    .set_params([
                         ("test-param", ["PARAM1"]),
                         ("another-test-param", ["PARAM2"])
                     ])
-                    .unwrap()
             );
             assert!(parser.next().is_none());
         }
@@ -1274,7 +1367,7 @@ mod tests {
 
             assert_eq!(
                 parser.next().unwrap().unwrap(),
-                Contentline::try_new("EMPTY-VALUE", "").unwrap()
+                Contentline::new("EMPTY-VALUE", "")
             );
             assert!(parser.next().is_none());
         }
@@ -1286,14 +1379,12 @@ mod tests {
 
             assert_eq!(
                 parser.next().unwrap().unwrap(),
-                Contentline::try_new("EMPTY-PARAM", "value")
-                    .unwrap()
-                    .try_set_params([
+                Contentline::new("EMPTY-PARAM", "value")
+                    .set_params([
                         ("paramtext", [""].as_slice()),
                         ("quoted-string", &[""]),
                         ("multiple", &[""; 11])
                     ])
-                    .unwrap()
             );
             assert!(parser.next().is_none());
         }
@@ -1321,9 +1412,8 @@ mod tests {
 
             assert_eq!(
                 parser.next().unwrap().unwrap(),
-                Contentline::try_new("RFC6868-TEST", "value")
-                    .unwrap()
-                    .try_set_params([
+                Contentline::new("RFC6868-TEST", "value")
+                    .set_params([
                         ("caret", ["^"]),
                         ("newline", ["\n"]),
                         ("double-quote", ["\""]),
@@ -1331,7 +1421,6 @@ mod tests {
                         ("weird", ["^^n"]),
                         ("others", ["^g^5^k^?^%^&^a"]),
                     ])
-                    .unwrap()
             );
             assert!(parser.next().is_none());
         }
@@ -1345,7 +1434,7 @@ mod tests {
 
         #[test]
         fn name_and_value() {
-            let contentline = Contentline::try_new("NAME", "VALUE").unwrap();
+            let contentline = Contentline::new("NAME", "VALUE");
 
             let expected = "NAME:VALUE\r\n";
 
@@ -1361,15 +1450,12 @@ mod tests {
 
         #[test]
         fn group_name_params_value() {
-            let contentline = Contentline::try_new("TEST-NAME", "test value \"with quotes\"")
-                .unwrap()
-                .try_set_group("TEST-GROUP")
-                .unwrap()
-                .try_set_params([
+            let contentline = Contentline::new("TEST-NAME", "test value \"with quotes\"")
+                .set_group("TEST-GROUP")
+                .set_params([
                     ("PARAM-1", ["param value 1"]),
                     ("PARAM-2", ["param value of parameter: 2"]),
-                ])
-                .unwrap();
+                ]);
 
             let expected = "\
 TEST-GROUP.TEST-NAME;PARAM-1=param value 1;PARAM-2=\"param value of paramete\r
@@ -1388,12 +1474,9 @@ TEST-GROUP.TEST-NAME;PARAM-1=param value 1;PARAM-2=\"param value of paramete\r
 
         #[test]
         fn identifiers_converted_to_uppercase() {
-            let contentline = Contentline::try_new("name", "value")
-                .unwrap()
-                .try_set_group("lower-group")
-                .unwrap()
-                .try_add_param("PaRaM", ["param value"])
-                .unwrap();
+            let contentline = Contentline::new("name", "value")
+                .set_group("lower-group")
+                .add_param("PaRaM", ["param value"]);
 
             let expected = "LOWER-GROUP.NAME;PARAM=param value:value\r\n";
 
@@ -1409,7 +1492,7 @@ TEST-GROUP.TEST-NAME;PARAM-1=param value 1;PARAM-2=\"param value of paramete\r
 
         #[test]
         fn empty_value() {
-            let contentline = Contentline::try_new("NAME", "").unwrap();
+            let contentline = Contentline::new("NAME", "");
 
             let expected = "NAME:\r\n";
 
@@ -1427,10 +1510,8 @@ TEST-GROUP.TEST-NAME;PARAM-1=param value 1;PARAM-2=\"param value of paramete\r
         fn empty_param() {
             let num_params = 15;
 
-            let contentline = Contentline::try_new("NAME", "value")
-                .unwrap()
-                .try_add_param("PARAM", iter::repeat("").take(num_params))
-                .unwrap();
+            let contentline = Contentline::new("NAME", "value")
+                .add_param("PARAM", iter::repeat("").take(num_params));
 
             let expected = {
                 let mut expected = String::from("NAME;PARAM=");
@@ -1451,16 +1532,14 @@ TEST-GROUP.TEST-NAME;PARAM-1=param value 1;PARAM-2=\"param value of paramete\r
 
         #[test]
         fn rfc6868() {
-            let contentline = Contentline::try_new("RFC6868-TEST", "value")
-                .unwrap()
-                .try_set_params([
+            let contentline = Contentline::new("RFC6868-TEST", "value")
+                .set_params([
                     ("CARET", ["^"]),
                     ("NEWLINE", ["\n"]),
                     ("DOUBLE-QUOTE", ["\""]),
                     ("ALL-IN-QUOTES", ["^;\n;\""]),
                     ("WEIRD", ["^^n"]),
-                ])
-                .unwrap();
+                ]);
 
             let expected = "RFC6868-TEST;CARET=^^;NEWLINE=^n;DOUBLE-QUOTE=^';ALL-IN-QUOTES=\"^^;^n;^'\";W\r\n EIRD=^^^^n:value\r\n";
 
