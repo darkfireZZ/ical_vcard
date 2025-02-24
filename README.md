@@ -56,17 +56,17 @@ END:VCARD\r
 let birthdays: HashMap<_, _> = Parser::new(vcard_file)
     .collect::<Result<Vec<_>, _>>()
     .expect("valid vcard file")
-    .split(|contentline| contentline.name == "BEGIN" && contentline.value == "VCARD")
+    .split(|contentline| contentline.name() == "BEGIN" && contentline.value() == "VCARD")
     .flat_map(|vcard| {
         let name = vcard
             .iter()
-            .find(|contentline| contentline.name == "FN")?
-            .value
+            .find(|contentline| contentline.name() == "FN")?
+            .value()
             .to_string();
         let birthday = vcard
             .iter()
-            .find(|contentline| contentline.name == "BDAY")?
-            .value
+            .find(|contentline| contentline.name() == "BDAY")?
+            .value()
             .to_string();
 
         Some((name, birthday))
@@ -92,49 +92,21 @@ let names = [
     "Thales",
 ];
 
-let contentlines = names.into_iter().flat_map(|name| [
-    Contentline {
-        group: None,
-        name: Identifier::new_borrowed("BEGIN").unwrap(),
-        params: Vec::new(),
-        value: Value::new_borrowed("VCARD").unwrap(),
-    },
-    Contentline {
-        group: None,
-        name: Identifier::new_borrowed("FN").unwrap(),
-        params: Vec::new(),
-        value: Value::new_borrowed(name).unwrap(),
-    },
-    Contentline {
-        group: None,
-        name: Identifier::new_borrowed("N").unwrap(),
-        params: Vec::new(),
-        value: Value::new_owned(format!(";{name};;;")).unwrap(),
-    },
-    Contentline {
-        group: None,
-        name: Identifier::new_borrowed("EMAIL").unwrap(),
-        params: vec![Param::new(
-            Identifier::new_borrowed("TYPE").unwrap(),
-            vec![ParamValue::new_borrowed("work").unwrap()]
-        ).unwrap()],
-        value: Value::new_owned(
-            format!("{name}@ancient-philosophers.gr", name = name.to_lowercase())
-        ).unwrap(),
-    },
-    Contentline {
-        group: None,
-        name: Identifier::new_borrowed("END").unwrap(),
-        params: Vec::new(),
-        value: Value::new_borrowed("VCARD").unwrap(),
-    },
-]);
+let contentlines = names.into_iter()
+    .flat_map(|name| [
+        Contentline::try_new("BEGIN", "VCARD".to_owned()).unwrap(),
+        Contentline::try_new("FN", name.to_owned()).unwrap(),
+        Contentline::try_new("N", format!(";{name};;;")).unwrap(),
+        Contentline::try_new("EMAIL", format!("{name}@ancient-philosophers.gr", name = name.to_lowercase())).unwrap()
+            .set_params([Param::try_new("TYPE", ["work"]).unwrap()]),
+        Contentline::try_new("END", "VCARD".to_owned()).unwrap(),
+    ]);
 
 let vcard = {
     let mut buffer = Vec::new();
     let mut writer = Writer::new(&mut buffer);
     writer.write_all(contentlines).expect("write to Vec should cause no errors");
-    buffer
+    String::from_utf8(buffer).expect("Output is valid UTF-8")
 };
 
 let expected = "\
@@ -158,7 +130,7 @@ FN:Thales\r
 N:;Thales;;;\r
 EMAIL;TYPE=work:thales@ancient-philosophers.gr\r
 END:VCARD\r
-".as_bytes();
+";
 
 assert_eq!(vcard, expected);
 ```
