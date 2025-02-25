@@ -11,7 +11,7 @@ keywords = ["ical", "vcard", "parser"]
 categories = ["parser-implementations", "parsing"]
 
 [dependencies]
-thiserror = "1.0.38"
+# No dependencies :)
 
 [dev-dependencies]
 proptest = "1.1.0"

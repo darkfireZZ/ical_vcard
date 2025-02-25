@@ -8,13 +8,13 @@ use {
     crate::folding::{FoldingWriter, UnfoldingReader},
     std::{
         borrow::Borrow,
+        error::Error,
         fmt::{self, Debug, Display, Formatter},
         hash::{Hash, Hasher},
         io::{self, Read, Write},
         iter::Iterator,
         str::FromStr,
     },
-    thiserror::Error,
 };
 
 mod folding;
@@ -93,15 +93,24 @@ impl<R: Read> Iterator for Parser<R> {
 }
 
 /// The error type returned if parsing fails.
-#[derive(Debug, Error)]
+#[derive(Debug)]
 pub enum ParseError {
     /// An IO error occurred while parsing.
-    #[error(transparent)]
-    IoError(#[from] io::Error),
+    IoError(io::Error),
     /// An invalid content line was encountered.
-    #[error(transparent)]
-    InvalidContentline(#[from] ParseContentlineError),
+    InvalidContentline(ParseContentlineError),
 }
+
+impl Display for ParseError {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match self {
+            Self::IoError(err) => Display::fmt(err, f),
+            Self::InvalidContentline(err) => Display::fmt(err, f),
+        }
+    }
+}
+
+impl Error for ParseError {}
 
 /// Writes an iCalendar or vCard file.
 ///
@@ -492,7 +501,7 @@ impl Display for Contentline {
 }
 
 /// Indicates an invalid [`Contentline`].
-#[derive(Debug, Error)]
+#[derive(Debug)]
 pub enum InvalidContentline {
     /// The group is invalid.
     InvalidGroup(InvalidIdentifier),
@@ -515,8 +524,10 @@ impl Display for InvalidContentline {
     }
 }
 
+impl Error for InvalidContentline {}
+
 /// Indicates a failure to parse a [`Contentline`].
-#[derive(Debug, Error)]
+#[derive(Debug)]
 pub struct ParseContentlineError {
     invalid_contentline: String,
 }
@@ -535,6 +546,8 @@ impl Display for ParseContentlineError {
         write!(f, "invalid contentline")
     }
 }
+
+impl Error for ParseContentlineError {}
 
 macro_rules! empty {
     () => {};
@@ -709,7 +722,7 @@ macro_rules! as_str_wrapper {
         #[doc = concat!("Indicates an attempt to create a [`", stringify!($type_name), "`] from an invalid ", $doc_name, ".")]
         ///
         #[doc = concat!("A [`", stringify!($type_name), "`] is considered valid if ", $valid_if, ".")]
-        #[derive(Debug, Error)]
+        #[derive(Debug)]
         pub struct $error_name;
 
         impl Display for $error_name {
@@ -717,6 +730,8 @@ macro_rules! as_str_wrapper {
                 write!(f, $error_message)
             }
         }
+
+        impl Error for $error_name {}
     };
 }
 
@@ -835,7 +850,7 @@ where
 /// Indicates a failed attempt to create a [`Param`].
 ///
 /// This happens when it is attempted to create a [`Param`] without any value.
-#[derive(Debug, Error)]
+#[derive(Debug)]
 pub enum InvalidParam {
     /// Empty parameter values.
     EmptyValues,
@@ -854,6 +869,8 @@ impl Display for InvalidParam {
         }
     }
 }
+
+impl Error for InvalidParam {}
 
 as_str_wrapper! {
     @metainfo {
