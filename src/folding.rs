@@ -209,7 +209,7 @@ impl<W: Write> FoldingWriter<W> {
 
 // TODO replace all uses of this function with std::str::floor_char_boundary()
 // as soon as it is stable
-/// Finds the smallest char_boundary `<= index`.
+/// Finds the smallest char boundary `<= index`.
 fn floor_char_boundary(s: &str, index: usize) -> usize {
     let mut char_boundary = index;
 
