@@ -1379,12 +1379,11 @@ mod tests {
 
             assert_eq!(
                 parser.next().unwrap().unwrap(),
-                Contentline::new("EMPTY-PARAM", "value")
-                    .set_params([
-                        ("paramtext", [""].as_slice()),
-                        ("quoted-string", &[""]),
-                        ("multiple", &[""; 11])
-                    ])
+                Contentline::new("EMPTY-PARAM", "value").set_params([
+                    ("paramtext", [""].as_slice()),
+                    ("quoted-string", &[""]),
+                    ("multiple", &[""; 11])
+                ])
             );
             assert!(parser.next().is_none());
         }
@@ -1412,15 +1411,14 @@ mod tests {
 
             assert_eq!(
                 parser.next().unwrap().unwrap(),
-                Contentline::new("RFC6868-TEST", "value")
-                    .set_params([
-                        ("caret", ["^"]),
-                        ("newline", ["\n"]),
-                        ("double-quote", ["\""]),
-                        ("all-in-quotes", ["^\n\""]),
-                        ("weird", ["^^n"]),
-                        ("others", ["^g^5^k^?^%^&^a"]),
-                    ])
+                Contentline::new("RFC6868-TEST", "value").set_params([
+                    ("caret", ["^"]),
+                    ("newline", ["\n"]),
+                    ("double-quote", ["\""]),
+                    ("all-in-quotes", ["^\n\""]),
+                    ("weird", ["^^n"]),
+                    ("others", ["^g^5^k^?^%^&^a"]),
+                ])
             );
             assert!(parser.next().is_none());
         }
@@ -1532,14 +1530,13 @@ TEST-GROUP.TEST-NAME;PARAM-1=param value 1;PARAM-2=\"param value of paramete\r
 
         #[test]
         fn rfc6868() {
-            let contentline = Contentline::new("RFC6868-TEST", "value")
-                .set_params([
-                    ("CARET", ["^"]),
-                    ("NEWLINE", ["\n"]),
-                    ("DOUBLE-QUOTE", ["\""]),
-                    ("ALL-IN-QUOTES", ["^;\n;\""]),
-                    ("WEIRD", ["^^n"]),
-                ]);
+            let contentline = Contentline::new("RFC6868-TEST", "value").set_params([
+                ("CARET", ["^"]),
+                ("NEWLINE", ["\n"]),
+                ("DOUBLE-QUOTE", ["\""]),
+                ("ALL-IN-QUOTES", ["^;\n;\""]),
+                ("WEIRD", ["^^n"]),
+            ]);
 
             let expected = "RFC6868-TEST;CARET=^^;NEWLINE=^n;DOUBLE-QUOTE=^';ALL-IN-QUOTES=\"^^;^n;^'\";W\r\n EIRD=^^^^n:value\r\n";
 
