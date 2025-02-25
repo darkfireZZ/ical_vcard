@@ -164,7 +164,7 @@ impl<W: Write> FoldingWriter<W> {
                 FOLDING_LINE_LENGTH - usize::from(self.current_line_length),
             );
 
-            self.writer.write_all(string[..fold_index].as_bytes())?;
+            self.writer.write_all(&string.as_bytes()[..fold_index])?;
             string = &string[fold_index..];
 
             self.writer.write_all(b"\r\n ")?;

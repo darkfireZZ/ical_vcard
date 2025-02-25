@@ -1,6 +1,6 @@
 [package]
 name = "ical_vcard"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 authors = ["Nicola Bruhin"]
 description = "parser and writer for the content line format used in vCard and iCalendar"
