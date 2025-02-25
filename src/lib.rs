@@ -56,7 +56,10 @@ mod folding;
 ///
 /// let contentlines = Parser::new(vcard_file.as_bytes()).collect::<Result<Vec<_>, _>>()?;
 ///
-/// let email_line = contentlines.iter().find(|contentline| contentline.name() == "EMAIL").unwrap();
+/// let email_line = contentlines
+///     .iter()
+///     .find(|contentline| contentline.name() == "EMAIL")
+///     .expect("EMAIL line exists");
 /// assert_eq!(email_line.value(), "michelle.depierre@example.com");
 ///
 /// let third_line = &contentlines[2];
@@ -372,7 +375,7 @@ impl Contentline {
     /// # Errors
     ///
     /// Fails if the parameter is invalid.
-    pub fn try_add_param<I, N, V>(self, name: N, values: I) -> Result<Self, InvalidParam>
+    pub fn try_add_param<I, N, V>(self, name: N, values: I) -> Result<Self, InvalidContentline>
     where
         I: IntoIterator<Item = V>,
         N: AsRef<str>,
@@ -813,7 +816,7 @@ impl Param {
     /// - The parameter name is invalid.
     /// - A parameter value is invalid.
     /// - `values` is empty.
-    pub fn try_new<I, N, V>(name: N, values: I) -> Result<Self, InvalidParam>
+    pub fn try_new<I, N, V>(name: N, values: I) -> Result<Self, InvalidContentline>
     where
         I: IntoIterator<Item = V>,
         N: AsRef<str>,
@@ -823,12 +826,15 @@ impl Param {
             .into_iter()
             .map(|value| ParamValue::new(value.as_ref().to_owned()))
             .collect::<Result<Vec<_>, InvalidParamValue>>()
-            .map_err(InvalidParam::InvalidValue)?;
+            .map_err(InvalidParam::InvalidValue)
+            .map_err(InvalidContentline::InvalidParam)?;
         if values.is_empty() {
-            return Err(InvalidParam::EmptyValues);
+            return Err(InvalidContentline::InvalidParam(InvalidParam::EmptyValues));
         }
 
-        let name = Identifier::new(name.as_ref().to_owned()).map_err(InvalidParam::InvalidName)?;
+        let name = Identifier::new(name.as_ref().to_owned())
+            .map_err(InvalidParam::InvalidName)
+            .map_err(InvalidContentline::InvalidParam)?;
 
         Ok(Self { name, values })
     }
@@ -840,7 +846,7 @@ where
     N: AsRef<str>,
     V: AsRef<str>,
 {
-    type Error = InvalidParam;
+    type Error = InvalidContentline;
 
     fn try_from((name, values): (N, I)) -> Result<Self, Self::Error> {
         Param::try_new(name, values)
