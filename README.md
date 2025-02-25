@@ -2,7 +2,6 @@
 [![crates.io](https://img.shields.io/crates/v/ical_vcard?style=flat-square)](https://crates.io/crates/ical_vcard)
 [![build status](https://img.shields.io/github/actions/workflow/status/darkfirezz/ical_vcard/ci.yml?style=flat-square)](https://github.com/darkfireZZ/ical_vcard/actions/workflows/ci.yml)
 [![docs.rs](https://img.shields.io/docsrs/ical_vcard?style=flat-square)](https://docs.rs/ical_vcard)
-[![codecov](https://img.shields.io/codecov/c/github/darkfirezz/ical_vcard?style=flat-square)](https://app.codecov.io/gh/darkfireZZ/ical_vcard)
 
 # ical_vcard
 
