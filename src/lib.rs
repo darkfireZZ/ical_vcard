@@ -610,8 +610,8 @@ macro_rules! as_str_wrapper {
             }
         }
     ) => {
-        // TODO: Case sensitivity is wrong
-        $( /* if */ $is_not_case_sensitive
+        $( /* if */ $is_case_sensitive
+            // If the wrapper is case sensitive, we can use the default string hash function
             #[derive(Hash)]
         )*
         #[doc = concat!("A wrapper of a [`AsRef<str>`] that is guaranteed to be a valid ", $doc_name, ".")]
@@ -684,18 +684,19 @@ macro_rules! as_str_wrapper {
         impl<T: AsRef<str>> PartialEq<str> for $type_name<T> {
             fn eq(&self, other: &str) -> bool {
                 $( /* if */ $is_case_sensitive
-                    self.value.as_ref().eq_ignore_ascii_case(other)
+                    self.value.as_ref() == other
                 )?
                 $( /* if */ $is_not_case_sensitive
-                    self.value.as_ref() == other
+                    self.value.as_ref().eq_ignore_ascii_case(other)
                 )?
             }
         }
 
-        $( /* if */ $is_case_sensitive
+        $( /* if */ $is_not_case_sensitive
             impl<T: AsRef<str>> Hash for $type_name<T> {
                 fn hash<H: Hasher>(&self, state: &mut H) {
-                    // implementation is mostly the same as in std::str
+                    // implementation is mostly the same as in std::str except that we are
+                    // converting the string to uppercase first
                     for c in self.value.as_ref().as_bytes() {
                         c.to_ascii_uppercase().hash(state);
                     }
@@ -740,7 +741,7 @@ macro_rules! as_str_wrapper {
 
 as_str_wrapper! {
     @metainfo {
-        case_sensitive: true,
+        case_sensitive: false,
         param_name: identifier,
         doc_name: "identifier",
         error_name: InvalidIdentifier,
@@ -880,7 +881,7 @@ impl Error for InvalidParam {}
 
 as_str_wrapper! {
     @metainfo {
-        case_sensitive: false,
+        case_sensitive: true,
         param_name: value,
         doc_name: "parameter value",
         error_name: InvalidParamValue,
@@ -909,7 +910,7 @@ as_str_wrapper! {
 
 as_str_wrapper! {
     @metainfo {
-        case_sensitive: false,
+        case_sensitive: true,
         param_name: value,
         doc_name: "value",
         error_name: InvalidValue,
@@ -1350,6 +1351,49 @@ const fn is_identifier_char(c: u8) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::Contentline;
+
+    /// Verifies that equality is reflexive.
+    #[test]
+    fn equality_reflexivity() {
+        let line = "group.NAME;PARAM=pval:Value"
+            .parse::<Contentline>()
+            .unwrap();
+        assert_eq!(line, line);
+    }
+
+    mod case_sensitivity {
+        use crate::Contentline;
+
+        /// Verifies that groups, names, and parameter names are case insensitive.
+        #[test]
+        fn case_insensitive() {
+            let line0 = "Group.lowerUPPER;PaRaM=parameter value:value"
+                .parse::<Contentline>()
+                .unwrap();
+            let line1 = "group.LOWERupper;PARAm=parameter value:value"
+                .parse::<Contentline>()
+                .unwrap();
+            assert_eq!(line0, line1);
+        }
+
+        /// Verifies that parameter values are case sensitive.
+        #[test]
+        fn case_sensitive_param_values() {
+            let line0 = "HUI;TEST=Test:Value".parse::<Contentline>().unwrap();
+            let line1 = "HUI;TEST=TEST:Value".parse::<Contentline>().unwrap();
+            assert_ne!(line0, line1);
+        }
+
+        /// Verifies that property values are case sensitive.
+        #[test]
+        fn case_sensitive_property_values() {
+            let line0 = "YOU;ARE=A:TEST".parse::<Contentline>().unwrap();
+            let line1 = "YOU;ARE=A:Test".parse::<Contentline>().unwrap();
+            assert_ne!(line0, line1);
+        }
+    }
+
     mod parse {
         use crate::{Contentline, Parser};
 
@@ -1409,22 +1453,6 @@ mod tests {
                 ])
             );
             assert!(parser.next().is_none());
-        }
-
-        #[test]
-        fn case_insensitivity() {
-            let contentline0 = "Group.lowerUPPER;PaRaM=parameter value:value";
-            let contentline1 = "group.LOWERupper;PARAm=parameter value:value";
-
-            let parsed0 = Parser::new(contentline0.as_bytes())
-                .collect::<Result<Vec<_>, _>>()
-                .unwrap();
-            let parsed1 = Parser::new(contentline1.as_bytes())
-                .collect::<Result<Vec<_>, _>>()
-                .unwrap();
-
-            assert_eq!(parsed0, parsed1);
-            assert_eq!(parsed0.len(), 1);
         }
 
         #[test]
