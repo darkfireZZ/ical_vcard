@@ -1,20 +1,35 @@
 #![doc = include_str!("../README.md")]
 #![deny(unsafe_code)]
-#![deny(clippy::all)]
-#![warn(clippy::cargo)]
-#![warn(missing_docs)]
+#![warn(
+    clippy::all,
+    clippy::pedantic,
+    clippy::absolute_paths,
+    clippy::allow_attributes_without_reason,
+    clippy::cargo,
+    clippy::dbg_macro,
+    clippy::exit,
+    clippy::todo,
+    clippy::unimplemented,
+    clippy::unwrap_used,
+    missing_debug_implementations,
+    missing_docs
+)]
+// The following lints are enable by default in clippy::pedantic, but are disabled here because
+// they are too aggressive.
+#![allow(clippy::module_name_repetitions, reason = "Occasionally useful")]
+#![allow(clippy::too_many_lines, reason = "This is not bad in my opinion")]
 
 use {
     crate::folding::{FoldingWriter, UnfoldingReader},
     std::{
         borrow::Borrow,
+        error::Error,
         fmt::{self, Debug, Display, Formatter},
         hash::{Hash, Hasher},
         io::{self, Read, Write},
         iter::Iterator,
         str::FromStr,
     },
-    thiserror::Error,
 };
 
 mod folding;
@@ -56,7 +71,10 @@ mod folding;
 ///
 /// let contentlines = Parser::new(vcard_file.as_bytes()).collect::<Result<Vec<_>, _>>()?;
 ///
-/// let email_line = contentlines.iter().find(|contentline| contentline.name() == "EMAIL").unwrap();
+/// let email_line = contentlines
+///     .iter()
+///     .find(|contentline| contentline.name() == "EMAIL")
+///     .expect("EMAIL line exists");
 /// assert_eq!(email_line.value(), "michelle.depierre@example.com");
 ///
 /// let third_line = &contentlines[2];
@@ -93,15 +111,24 @@ impl<R: Read> Iterator for Parser<R> {
 }
 
 /// The error type returned if parsing fails.
-#[derive(Debug, Error)]
+#[derive(Debug)]
 pub enum ParseError {
     /// An IO error occurred while parsing.
-    #[error(transparent)]
-    IoError(#[from] io::Error),
+    IoError(io::Error),
     /// An invalid content line was encountered.
-    #[error(transparent)]
-    InvalidContentline(#[from] ParseContentlineError),
+    InvalidContentline(ParseContentlineError),
 }
+
+impl Display for ParseError {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match self {
+            Self::IoError(err) => Display::fmt(err, f),
+            Self::InvalidContentline(err) => Display::fmt(err, f),
+        }
+    }
+}
+
+impl Error for ParseError {}
 
 /// Writes an iCalendar or vCard file.
 ///
@@ -155,6 +182,7 @@ pub enum ParseError {
 /// # Ok(())
 /// # }
 /// ```
+#[derive(Debug)]
 pub struct Writer<W: Write> {
     folder: FoldingWriter<W>,
 }
@@ -241,21 +269,25 @@ pub struct Contentline {
 
 impl Contentline {
     /// Get the group of the content line.
+    #[must_use]
     pub fn group(&self) -> Option<&str> {
-        self.group.as_ref().map(|group| group.as_ref())
+        self.group.as_ref().map(AsRef::as_ref)
     }
 
     /// Get the name of the content line.
+    #[must_use]
     pub fn name(&self) -> &str {
         self.name.as_ref()
     }
 
     /// Get the parameters of the content line.
+    #[must_use]
     pub fn params(&self) -> &[Param] {
         &self.params
     }
 
     /// Get the value of the content line.
+    #[must_use]
     pub fn value(&self) -> &str {
         self.value.as_ref()
     }
@@ -267,12 +299,13 @@ impl Contentline {
     /// # Panics
     ///
     /// Panics whenever [`Contentline::try_new`] would return an error.
+    #[must_use]
     pub fn new<N, V>(name: N, value: V) -> Self
     where
         N: AsRef<str>,
         V: AsRef<str>,
     {
-        Self::try_new(name, value).unwrap()
+        Self::try_new(name, value).unwrap_or_else(|err| panic!("{err}"))
     }
 
     /// Creates a new [`Contentline`].
@@ -307,11 +340,12 @@ impl Contentline {
     /// # Panics
     ///
     /// Panics whenever [`Contentline::try_set_group`] would return an error.
+    #[must_use]
     pub fn set_group<G>(self, group: G) -> Self
     where
         G: AsRef<str>,
     {
-        Self::try_set_group(self, group).unwrap()
+        Self::try_set_group(self, group).unwrap_or_else(|err| panic!("{err}"))
     }
 
     /// Sets the group of the [`Contentline`].
@@ -333,6 +367,7 @@ impl Contentline {
     }
 
     /// Unsets the group of the [`Contentline`].
+    #[must_use]
     pub fn unset_group(self) -> Self {
         Self {
             group: None,
@@ -347,13 +382,14 @@ impl Contentline {
     /// # Panics
     ///
     /// Panics whenever [`Contentline::try_add_param`] would return an error.
+    #[must_use]
     pub fn add_param<I, N, V>(self, name: N, values: I) -> Self
     where
         I: IntoIterator<Item = V>,
         N: AsRef<str>,
         V: AsRef<str>,
     {
-        Self::try_add_param(self, name, values).unwrap()
+        Self::try_add_param(self, name, values).unwrap_or_else(|err| panic!("{err}"))
     }
 
     /// Adds a parameter to the [`Contentline`].
@@ -363,7 +399,7 @@ impl Contentline {
     /// # Errors
     ///
     /// Fails if the parameter is invalid.
-    pub fn try_add_param<I, N, V>(self, name: N, values: I) -> Result<Self, InvalidParam>
+    pub fn try_add_param<I, N, V>(self, name: N, values: I) -> Result<Self, InvalidContentline>
     where
         I: IntoIterator<Item = V>,
         N: AsRef<str>,
@@ -388,13 +424,15 @@ impl Contentline {
     /// # Panics
     ///
     /// Panics whenever [`Contentline::try_set_params`] would return an error.
+    #[must_use]
     pub fn set_params<I, P>(self, params: I) -> Self
     where
         I: IntoIterator<Item = P>,
         P: TryInto<Param>,
-        P::Error: Debug,
+        P::Error: Display,
     {
-        self.try_set_params(params).unwrap()
+        self.try_set_params(params)
+            .unwrap_or_else(|err| panic!("{err}"))
     }
 
     /// Sets the parameters of the [`Contentline`].
@@ -492,7 +530,7 @@ impl Display for Contentline {
 }
 
 /// Indicates an invalid [`Contentline`].
-#[derive(Debug, Error)]
+#[derive(Debug)]
 pub enum InvalidContentline {
     /// The group is invalid.
     InvalidGroup(InvalidIdentifier),
@@ -507,22 +545,25 @@ pub enum InvalidContentline {
 impl Display for InvalidContentline {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            Self::InvalidGroup(err) => write!(f, "Invalid group: {}", err),
-            Self::InvalidName(err) => write!(f, "Invalid name: {}", err),
-            Self::InvalidValue(err) => write!(f, "Invalid value: {}", err),
-            Self::InvalidParam(err) => write!(f, "Invalid parameter: {}", err),
+            Self::InvalidGroup(err) => write!(f, "Invalid group: {err}"),
+            Self::InvalidName(err) => write!(f, "Invalid name: {err}"),
+            Self::InvalidValue(err) => write!(f, "Invalid value: {err}"),
+            Self::InvalidParam(err) => write!(f, "Invalid parameter: {err}"),
         }
     }
 }
 
+impl Error for InvalidContentline {}
+
 /// Indicates a failure to parse a [`Contentline`].
-#[derive(Debug, Error)]
+#[derive(Debug)]
 pub struct ParseContentlineError {
     invalid_contentline: String,
 }
 
 impl ParseContentlineError {
     /// Returns the contentline that caused the error.
+    #[must_use]
     pub fn invalid_contentline(&self) -> &str {
         &self.invalid_contentline
     }
@@ -535,6 +576,8 @@ impl Display for ParseContentlineError {
         write!(f, "invalid contentline")
     }
 }
+
+impl Error for ParseContentlineError {}
 
 macro_rules! empty {
     () => {};
@@ -594,8 +637,8 @@ macro_rules! as_str_wrapper {
             }
         }
     ) => {
-        // TODO: Case sensitivity is wrong
-        $( /* if */ $is_not_case_sensitive
+        $( /* if */ $is_case_sensitive
+            // If the wrapper is case sensitive, we can use the default string hash function
             #[derive(Hash)]
         )*
         #[doc = concat!("A wrapper of a [`AsRef<str>`] that is guaranteed to be a valid ", $doc_name, ".")]
@@ -668,18 +711,19 @@ macro_rules! as_str_wrapper {
         impl<T: AsRef<str>> PartialEq<str> for $type_name<T> {
             fn eq(&self, other: &str) -> bool {
                 $( /* if */ $is_case_sensitive
-                    self.value.as_ref().eq_ignore_ascii_case(other)
+                    self.value.as_ref() == other
                 )?
                 $( /* if */ $is_not_case_sensitive
-                    self.value.as_ref() == other
+                    self.value.as_ref().eq_ignore_ascii_case(other)
                 )?
             }
         }
 
-        $( /* if */ $is_case_sensitive
+        $( /* if */ $is_not_case_sensitive
             impl<T: AsRef<str>> Hash for $type_name<T> {
                 fn hash<H: Hasher>(&self, state: &mut H) {
-                    // implementation is mostly the same as in std::str
+                    // implementation is mostly the same as in std::str except that we are
+                    // converting the string to uppercase first
                     for c in self.value.as_ref().as_bytes() {
                         c.to_ascii_uppercase().hash(state);
                     }
@@ -709,7 +753,7 @@ macro_rules! as_str_wrapper {
         #[doc = concat!("Indicates an attempt to create a [`", stringify!($type_name), "`] from an invalid ", $doc_name, ".")]
         ///
         #[doc = concat!("A [`", stringify!($type_name), "`] is considered valid if ", $valid_if, ".")]
-        #[derive(Debug, Error)]
+        #[derive(Debug)]
         pub struct $error_name;
 
         impl Display for $error_name {
@@ -717,12 +761,14 @@ macro_rules! as_str_wrapper {
                 write!(f, $error_message)
             }
         }
+
+        impl Error for $error_name {}
     };
 }
 
 as_str_wrapper! {
     @metainfo {
-        case_sensitive: true,
+        case_sensitive: false,
         param_name: identifier,
         doc_name: "identifier",
         error_name: InvalidIdentifier,
@@ -762,6 +808,7 @@ pub struct Param {
 
 impl Param {
     /// Get the name of the parameter.
+    #[must_use]
     pub fn name(&self) -> &str {
         self.name.as_ref()
     }
@@ -770,6 +817,7 @@ impl Param {
     /// Get the values of the parameter.
     ///
     /// The values are guaranteed to be non-empty.
+    #[must_use]
     pub fn values(&self) -> &[ParamValue<String>] {
         &self.values
     }
@@ -778,7 +826,7 @@ impl Param {
     ///
     /// See [`Param::try_new`] for a non-panicking version.
     ///
-    /// # Errors
+    /// # Panics
     ///
     /// Fails whenever [`Param::try_new`] would return an error.
     pub fn new<I, N, V>(name: N, values: I) -> Self
@@ -787,7 +835,7 @@ impl Param {
         N: AsRef<str>,
         V: AsRef<str>,
     {
-        Self::try_new(name, values).unwrap()
+        Self::try_new(name, values).unwrap_or_else(|err| panic!("{err}"))
     }
 
     /// Creates a new [`Param`].
@@ -798,7 +846,7 @@ impl Param {
     /// - The parameter name is invalid.
     /// - A parameter value is invalid.
     /// - `values` is empty.
-    pub fn try_new<I, N, V>(name: N, values: I) -> Result<Self, InvalidParam>
+    pub fn try_new<I, N, V>(name: N, values: I) -> Result<Self, InvalidContentline>
     where
         I: IntoIterator<Item = V>,
         N: AsRef<str>,
@@ -808,12 +856,15 @@ impl Param {
             .into_iter()
             .map(|value| ParamValue::new(value.as_ref().to_owned()))
             .collect::<Result<Vec<_>, InvalidParamValue>>()
-            .map_err(InvalidParam::InvalidValue)?;
+            .map_err(InvalidParam::InvalidValue)
+            .map_err(InvalidContentline::InvalidParam)?;
         if values.is_empty() {
-            return Err(InvalidParam::EmptyValues);
+            return Err(InvalidContentline::InvalidParam(InvalidParam::EmptyValues));
         }
 
-        let name = Identifier::new(name.as_ref().to_owned()).map_err(InvalidParam::InvalidName)?;
+        let name = Identifier::new(name.as_ref().to_owned())
+            .map_err(InvalidParam::InvalidName)
+            .map_err(InvalidContentline::InvalidParam)?;
 
         Ok(Self { name, values })
     }
@@ -825,7 +876,7 @@ where
     N: AsRef<str>,
     V: AsRef<str>,
 {
-    type Error = InvalidParam;
+    type Error = InvalidContentline;
 
     fn try_from((name, values): (N, I)) -> Result<Self, Self::Error> {
         Param::try_new(name, values)
@@ -835,7 +886,7 @@ where
 /// Indicates a failed attempt to create a [`Param`].
 ///
 /// This happens when it is attempted to create a [`Param`] without any value.
-#[derive(Debug, Error)]
+#[derive(Debug)]
 pub enum InvalidParam {
     /// Empty parameter values.
     EmptyValues,
@@ -849,15 +900,17 @@ impl Display for InvalidParam {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::EmptyValues => write!(f, "Empty parameter values"),
-            Self::InvalidName(err) => write!(f, "Invalid parameter name: {}", err),
-            Self::InvalidValue(err) => write!(f, "Invalid parameter value: {}", err),
+            Self::InvalidName(err) => write!(f, "Invalid parameter name: {err}"),
+            Self::InvalidValue(err) => write!(f, "Invalid parameter value: {err}"),
         }
     }
 }
 
+impl Error for InvalidParam {}
+
 as_str_wrapper! {
     @metainfo {
-        case_sensitive: false,
+        case_sensitive: true,
         param_name: value,
         doc_name: "parameter value",
         error_name: InvalidParamValue,
@@ -886,7 +939,7 @@ as_str_wrapper! {
 
 as_str_wrapper! {
     @metainfo {
-        case_sensitive: false,
+        case_sensitive: true,
         param_name: value,
         doc_name: "value",
         error_name: InvalidValue,
@@ -1029,7 +1082,7 @@ fn parse_quoted_string(contentline: &mut &str) -> Result<String, IntermediatePar
         .bytes()
         .position(|c| !is_qsafe_char(c))
         .ok_or(IntermediateParsingError)?;
-    if &contentline[quoted_string_length..quoted_string_length + 1] == "\"" {
+    if &contentline[quoted_string_length..=quoted_string_length] == "\"" {
         let quoted_string = parse_param_value_rfc6868(&contentline[..quoted_string_length]);
         *contentline = &contentline[quoted_string_length + 1..];
         Ok(quoted_string)
@@ -1075,23 +1128,20 @@ fn parse_param_value_rfc6868(param_value: &str) -> String {
 
             while let Some(index) = next_index {
                 result.push_str(&param_value[..index]);
-                match param_value.get(index + 1..index + 2) {
-                    Some(escaped_char) => {
-                        match escaped_char {
-                            "n" => result.push('\n'),
-                            "'" => result.push('\"'),
-                            "^" => result.push('^'),
-                            other => {
-                                result.push('^');
-                                result.push_str(other);
-                            }
+                if let Some(escaped_char) = param_value.get(index + 1..index + 2) {
+                    match escaped_char {
+                        "n" => result.push('\n'),
+                        "'" => result.push('\"'),
+                        "^" => result.push('^'),
+                        other => {
+                            result.push('^');
+                            result.push_str(other);
                         }
-                        param_value = &param_value[index + 2..];
                     }
-                    None => {
-                        result.push('^');
-                        param_value = &param_value[index + 1..];
-                    }
+                    param_value = &param_value[index + 2..];
+                } else {
+                    result.push('^');
+                    param_value = &param_value[index + 1..];
                 }
                 next_index = param_value.find('^');
             }
@@ -1228,7 +1278,7 @@ where
 {
     while let Some(index) = value.find(['\n', '^', '"']) {
         writer(&value[..index])?;
-        match &value[index..index + 1] {
+        match &value[index..=index] {
             "\n" => writer("^n"),
             "^" => writer("^^"),
             "\"" => writer("^'"),
@@ -1327,6 +1377,49 @@ const fn is_identifier_char(c: u8) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::Contentline;
+
+    /// Verifies that equality is reflexive.
+    #[test]
+    fn equality_reflexivity() {
+        let line = "group.NAME;PARAM=pval:Value"
+            .parse::<Contentline>()
+            .unwrap();
+        assert_eq!(line, line);
+    }
+
+    mod case_sensitivity {
+        use crate::Contentline;
+
+        /// Verifies that groups, names, and parameter names are case insensitive.
+        #[test]
+        fn case_insensitive() {
+            let line0 = "Group.lowerUPPER;PaRaM=parameter value:value"
+                .parse::<Contentline>()
+                .unwrap();
+            let line1 = "group.LOWERupper;PARAm=parameter value:value"
+                .parse::<Contentline>()
+                .unwrap();
+            assert_eq!(line0, line1);
+        }
+
+        /// Verifies that parameter values are case sensitive.
+        #[test]
+        fn case_sensitive_param_values() {
+            let line0 = "HUI;TEST=Test:Value".parse::<Contentline>().unwrap();
+            let line1 = "HUI;TEST=TEST:Value".parse::<Contentline>().unwrap();
+            assert_ne!(line0, line1);
+        }
+
+        /// Verifies that property values are case sensitive.
+        #[test]
+        fn case_sensitive_property_values() {
+            let line0 = "YOU;ARE=A:TEST".parse::<Contentline>().unwrap();
+            let line1 = "YOU;ARE=A:Test".parse::<Contentline>().unwrap();
+            assert_ne!(line0, line1);
+        }
+    }
+
     mod parse {
         use crate::{Contentline, Parser};
 
@@ -1386,22 +1479,6 @@ mod tests {
                 ])
             );
             assert!(parser.next().is_none());
-        }
-
-        #[test]
-        fn case_insensitivity() {
-            let contentline0 = "Group.lowerUPPER;PaRaM=parameter value:value";
-            let contentline1 = "group.LOWERupper;PARAm=parameter value:value";
-
-            let parsed0 = Parser::new(contentline0.as_bytes())
-                .collect::<Result<Vec<_>, _>>()
-                .unwrap();
-            let parsed1 = Parser::new(contentline1.as_bytes())
-                .collect::<Result<Vec<_>, _>>()
-                .unwrap();
-
-            assert_eq!(parsed0, parsed1);
-            assert_eq!(parsed0.len(), 1);
         }
 
         #[test]
